@@ -1,3 +1,23 @@
+# 🚀 Quick Deploy
+
+1. Edit `infra/main.parameters.json` and set at least:
+  - `adminPassword`: Set your desired VM password (required)
+  - `cloudInitYaml`: Leave as `@vm/cloud-init-aio.tmpl.yaml` (default)
+  - (Optional) Change `location`, `vmSize`, or other parameters as needed
+
+2. Create the resource group (if it doesn't exist):
+  ```bash
+  az group create --name <your-resource-group> --location <your-location>
+  ```
+
+3. Deploy everything with one command:
+  ```bash
+  az deployment group create \
+    --resource-group <your-resource-group> \
+    --template-file infra/main.bicep \
+    --parameters @infra/main.parameters.json
+  ```
+
 # 🚀 Azure IoT Operations — One‑Shot Lab (Ubuntu 24.04 + K3s + Device Simulation)
 
 ![Azure Arc](https://img.shields.io/badge/Azure%20Arc-Enabled-0078D4)
@@ -34,17 +54,18 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
 
-# Edit infra/main.parameters.json with your values:
-#   - vmName: VM name (e.g., "aio24")
-#   - adminUsername: VM admin username (default: "azureuser")
-#   - adminPassword: Password for the VM (string, will be used for SSH login)
-#   - cloudInitYaml: Set to @vm/cloud-init-aio.tmpl.yaml to use the provided YAML file
 
-# Deploy using Bicep:
-az deployment group create \
-  --resource-group <your-resource-group> \
-  --template-file infra/main.bicep \
-  --parameters @infra/main.parameters.json
+## Manual Parameter Editing (if needed)
+
+Edit `infra/main.parameters.json` to customize:
+- `location`: Azure region (e.g., "eastus2")
+- `vmName`: VM name (e.g., "aio24")
+- `adminUsername`: VM admin username (default: "azureuser")
+- `adminPassword`: Password for the VM (required)
+- `cloudInitYaml`: Use `@vm/cloud-init-aio.tmpl.yaml` (default)
+- `vmSize`: VM size (default: "Standard_D4s_v5")
+
+
 ```
 
 

@@ -1,5 +1,6 @@
 // main.bicep - Azure IoT Ops Lab deployment
 
+
 param location string = resourceGroup().location
 param vmName string
 param adminUsername string = 'azureuser'
