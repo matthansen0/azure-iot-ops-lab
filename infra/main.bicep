@@ -1,5 +1,5 @@
-// main.bicep - Azure IoT Ops Lab deployment
 
+// main.bicep - Azure IoT Ops Lab deployment
 
 param location string = resourceGroup().location
 param vmName string
@@ -14,6 +14,11 @@ param nicName string = '${vmName}-nic'
 param vmSize string = 'Standard_D4s_v5'
 param cloudInitYaml string
 
+
+// User-assigned managed identity for deployment script
+resource scriptIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'aio-deploy-script-identity'
+  location: location
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   name: vnetName
@@ -141,7 +146,12 @@ resource assignVmContributor 'Microsoft.Resources/deploymentScripts@2020-10-01' 
   name: 'assignVmContributor'
   location: location
   kind: 'AzureCLI'
-  dependsOn: [ vm ]
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${scriptIdentity.id}': {}
+    }
+  }
   properties: {
     azCliVersion: '2.53.0'
     timeout: 'PT10M'
@@ -153,13 +163,25 @@ resource assignVmContributor 'Microsoft.Resources/deploymentScripts@2020-10-01' 
         value: vm.identity.principalId
       }
       {
-        name: 'RG_NAME'
-        value: resourceGroup().name
+        name: 'RG_ID'
+        value: resourceGroup().id
       }
     ]
     scriptContent: '''
-      az role assignment create --assignee $VM_PRINCIPAL_ID --role "Contributor" --resource-group $RG_NAME
+      az role assignment create --assignee $VM_PRINCIPAL_ID --role "Contributor" --scope $RG_ID
     '''
     forceUpdateTag: uniqueString(vm.name)
   }
+}
+
+// Grant Owner role to the deployment script's managed identity so it can assign roles
+resource scriptIdentityRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, scriptIdentity.id, '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635') // Owner
+    principalId: scriptIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 }
