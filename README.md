@@ -21,7 +21,7 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
   - **[Configure your cluster (quickstart)](https://learn.microsoft.com/azure/iot-operations/get-started-end-to-end-sample/quickstart-configure)**
 
 > [!NOTE]
-> *There is existing automated builds in the above documentation to run this in codespace, but the purpose of this repo is to build it out in a VM for a longer-term lab.* 
+> *There is existing automated builds in the above documentation to run this in Codespaces, but the purpose of this repo is to build it out in a VM for a longer-term lab.* 
 
 
 
