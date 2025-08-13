@@ -39,7 +39,6 @@ cd azure-iot-ops-lab
 
 1. Edit `infra/main.parameters.json` and set at least:
   - `adminPassword`: Set your desired VM password (required)
-  - `cloudInitYaml`: Leave as `@vm/cloud-init-aio.tmpl.yaml` (default)
   - (Optional) Change `location`, `vmSize`, or other parameters as needed
 
 2. Create the resource group (if it doesn't exist):
