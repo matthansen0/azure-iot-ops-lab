@@ -97,6 +97,9 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
 resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: vmName
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     hardwareProfile: {
       vmSize: vmSize
@@ -129,5 +132,34 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         }
       ]
     }
+  }
+}
+
+
+// Assign Contributor role to the VM's managed identity after VM creation (fully automated)
+resource assignVmContributor 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
+  name: 'assignVmContributor'
+  location: location
+  kind: 'AzureCLI'
+  dependsOn: [ vm ]
+  properties: {
+    azCliVersion: '2.53.0'
+    timeout: 'PT10M'
+    cleanupPreference: 'OnSuccess'
+    retentionInterval: 'P1D'
+    environmentVariables: [
+      {
+        name: 'VM_PRINCIPAL_ID'
+        value: vm.identity.principalId
+      }
+      {
+        name: 'RG_NAME'
+        value: resourceGroup().name
+      }
+    ]
+    scriptContent: '''
+      az role assignment create --assignee $VM_PRINCIPAL_ID --role "Contributor" --resource-group $RG_NAME
+    '''
+    forceUpdateTag: uniqueString(vm.name)
   }
 }
