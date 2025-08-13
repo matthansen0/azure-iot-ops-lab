@@ -1,5 +1,5 @@
 
-# 🚀 Azure IoT Operations — One‑Shot Lab (Ubuntu 24.04 + K3s + Device Simulation)
+# 🚀 Azure IoT Operations — All-in-One Lab (Ubuntu 24.04 + K3s + Device Simulation)
 
 ![Azure Arc](https://img.shields.io/badge/Azure%20Arc-Enabled-0078D4)
 ![Azure IoT](https://img.shields.io/badge/Azure%20IoT-Operations-0078D4?logo=microsoft-azure&logoColor=white)
@@ -53,6 +53,9 @@ cd azure-iot-ops-lab
     --template-file infra/main.bicep \
     --parameters @infra/main.parameters.json
   ```
+
+> [!TIP]
+> Make sure you're back in the repo root before running the ``az deployment`` command above. If you drop down into the infra folder to modify the parameters and don't go back the file paths will no match up with the command.
 
 > **Manual Parameter Editing (if needed):**
 > Edit `infra/main.parameters.json` to customize:
