@@ -1,11 +1,12 @@
 
-# 🚀 Azure IoT Operations — All-in-One Lab (Ubuntu 24.04 + K3s + Device Simulation)
+# 🚀 Azure IoT Operations — All-in-One Lab
 
 ![Azure Arc](https://img.shields.io/badge/Azure%20Arc-Enabled-0078D4)
 ![Azure IoT](https://img.shields.io/badge/Azure%20IoT-Operations-0078D4?logo=microsoft-azure&logoColor=white)
 ![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420)
 ![K3s](https://img.shields.io/badge/Kubernetes-K3s-326CE5)
 
+**Ubuntu 24.04 + K3s + Device Simulation:**
 
 Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure IoT Operations** (AIO) lab: K3s, Arc connect, AIO foundation, the **embedded quickstarts** (devices, assets, data flow), and a simulator — all from **Azure Cloud Shell** with two scripts. Tear it down with one more.
 
