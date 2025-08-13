@@ -44,13 +44,13 @@ cd azure-iot-ops-lab
 
 2. Create the resource group (if it doesn't exist):
   ```bash
-  az group create --name <your-resource-group> --location <your-location>
+  az group create --name rg-aioLab --location eastus2
   ```
 
 3. Deploy everything with one command:
   ```bash
   az deployment group create \
-    --resource-group <your-resource-group> \
+    --resource-group rg-aioLab \
     --template-file infra/main.bicep \
     --parameters @infra/main.parameters.json
   ```
@@ -61,7 +61,6 @@ cd azure-iot-ops-lab
 > - `vmName`: VM name (e.g., "aio24")
 > - `adminUsername`: VM admin username (default: "azureuser")
 > - `adminPassword`: Password for the VM (required)
-> - `cloudInitYaml`: Use `@vm/cloud-init-aio.tmpl.yaml` (default)
 > - `vmSize`: VM size (default: "Standard_D4s_v5")
 
 

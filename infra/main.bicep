@@ -12,7 +12,6 @@ param nsgName string = '${vmName}-nsg'
 param pipName string = '${vmName}-pip'
 param nicName string = '${vmName}-nic'
 param vmSize string = 'Standard_D4s_v5'
-param imageUrn string = 'Ubuntu2404'
 param cloudInitYaml string
 
 // VNet
@@ -114,7 +113,10 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     storageProfile: {
       imageReference: {
-        id: imageUrn
+        publisher: 'Canonical'
+        offer: '0001-com-ubuntu-server-jammy'
+        sku: '24_04-lts-gen2'
+        version: 'latest'
       }
       osDisk: {
         createOption: 'FromImage'

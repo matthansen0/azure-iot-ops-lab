@@ -8,7 +8,6 @@
   "vmName": { "value": "aio24" },
     "adminUsername": { "value": "azureuser" },
   "adminPassword": { "value": "<your-password>" },
-  "cloudInitYaml": { "value": "@vm/cloud-init-aio.tmpl.yaml" },
-  "imageUrn": { "value": "Ubuntu2404" }
+  "cloudInitYaml": { "value": "@vm/cloud-init-aio.tmpl.yaml" }
   }
 }
