@@ -74,7 +74,7 @@ kubectl get pods -n azure-arc-containerstorage
 kubectl get pods -n cert-manager
 
 # In Azure
-az iot ops list -g <your-ops-resource-group> -o table
+az iot ops list -g rg-aioLab -o table
 ```
 
 > View progress logs on the VM:
@@ -96,7 +96,7 @@ az iot ops list -g <your-ops-resource-group> -o table
 > [!NOTE]
 > To remove all resources, simply delete the resource group:
 > ```bash
-> az group delete --name <your-resource-group>
+> az group delete --name rg-aioLab
 > ```
 
 Because the VM uses a **system‑assigned** identity, deleting the VM deletes its identity; RG‑scoped role assignments are removed with the RG. (If you granted extra roles at broader scopes, remove those first.)
