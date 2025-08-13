@@ -27,24 +27,27 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 
 ---
 
-## 🧪 Quick start (Azure Cloud Shell)
+
+## 🧪 Quick start (Bicep deployment)
 
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x deploy.sh destroy.sh
 
-./deploy.sh \
-  --subscription "<SUB_ID>" \
-  --location "eastus" \
-  --compute-rg "rg-aioCompute" \
-  --ops-rg "rg-aioOps" \
-  --vm-name "aio24" \
-  --ssh-public-key "$HOME/.ssh/id_rsa.pub" \
-  --storage-account "aio$(date +%s)" \
-  --schema-registry "aioqs-sr" \
-  --schema-namespace "aioqs-ns"
+# Edit infra/main.parameters.json with your values:
+#   - vmName: VM name (e.g., "aio24")
+#   - adminUsername: VM admin username (default: "azureuser")
+#   - adminPassword: Password for the VM (string, will be used for SSH login)
+#   - cloudInitYaml: Set to @vm/cloud-init-aio.tmpl.yaml to use the provided YAML file
+
+# Deploy using Bicep:
+az deployment group create \
+  --resource-group <your-resource-group> \
+  --template-file infra/main.bicep \
+  --parameters @infra/main.parameters.json
 ```
+
+
 
 ### Verify (optional)
 
@@ -56,7 +59,7 @@ kubectl get pods -n azure-arc-containerstorage
 kubectl get pods -n cert-manager
 
 # In Azure
-az iot ops list -g rg-aioOps -o table
+az iot ops list -g <your-ops-resource-group> -o table
 ```
 
 > View progress logs on the VM:
@@ -73,9 +76,13 @@ az iot ops list -g rg-aioOps -o table
 
 ## 🗑️ Clean up
 
-```bash
-./destroy.sh --compute-rg "rg-aioCompute" --ops-rg "rg-aioOps"
-```
+
+
+> [!NOTE]
+> To remove all resources, simply delete the resource group:
+> ```bash
+> az group delete --name <your-resource-group>
+> ```
 
 Because the VM uses a **system‑assigned** identity, deleting the VM deletes its identity; RG‑scoped role assignments are removed with the RG. (If you granted extra roles at broader scopes, remove those first.)
 
@@ -83,7 +90,7 @@ Because the VM uses a **system‑assigned** identity, deleting the VM deletes it
 
 ## 🔐 Lab Authentication
 
-- `deploy.sh` enables a **System‑Assigned Managed Identity** on the VM and grants it rights on the **Ops RG**.  
+- The Bicep deployment enables a **System‑Assigned Managed Identity** on the VM and grants it rights on the **Ops RG**.  
 - On first boot, `cloud-init` runs inside the VM and uses **`az login --identity`** to perform all control‑plane actions (Arc connect, AIO resources, quickstarts).  
 - You can tighten RBAC later (e.g., use the Arc Onboarding + AIO Onboarding roles), but **Contributor on the Ops RG** keeps the sample simple for a lab environment.
 
@@ -94,10 +101,10 @@ Because the VM uses a **system‑assigned** identity, deleting the VM deletes it
 - General AIO health & config checks:  
   - `az iot ops check`  
   - `az iot ops support create-bundle`  
-- If a run failed during AIO init/create and you see “multiple extensions” errors, delete the lab RGs with `destroy.sh` and redeploy (fastest in a lab).
+- If a run failed during AIO init/create and you see “multiple extensions” errors, delete the lab resource group and redeploy (fastest in a lab).
 
 ---
 
 ## 💸 Cost & limits
 
-Expect charges for the VM and Azure resources in the Ops Resource Group (Storage, Event Hubs created by the quickstart). Power off the VM when not in use, and use `destroy.sh` when you’re done and want to delete everything.
+Expect charges for the VM and Azure resources in the Ops Resource Group (Storage, Event Hubs created by the quickstart). Power off the VM when not in use, and delete the resource group when you’re done and want to delete everything.
