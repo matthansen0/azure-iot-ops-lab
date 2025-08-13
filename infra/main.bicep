@@ -1,5 +1,5 @@
-
 // main.bicep - Azure IoT Ops Lab deployment
+
 
 param location string = resourceGroup().location
 param vmName string
@@ -19,6 +19,7 @@ param cloudInitYaml string
 resource scriptIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'aio-deploy-script-identity'
   location: location
+}
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   name: vnetName
@@ -183,5 +184,4 @@ resource scriptIdentityRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: scriptIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
-}
 }
