@@ -70,7 +70,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" ]] && usage
-if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then echo "SSH key not found: $SSH_PUBLIC_KEY"; exit 1; fi
+
+# Check for SSH key, generate if missing
+if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then
+  echo "SSH key not found: $SSH_PUBLIC_KEY"
+  echo "Generating a new SSH key pair..."
+  ssh-keygen -t rsa -b 4096 -f "${SSH_PUBLIC_KEY%.*}" -N ""
+fi
 
 echo "==> Setting subscription"
 az account set --subscription "$SUBSCRIPTION"
