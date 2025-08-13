@@ -1,0 +1,141 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+write_files:
+  - path: /etc/aio.env
+    permissions: '0644'
+    content: |
+      SUBSCRIPTION=@@SUBSCRIPTION@@
+      LOCATION=@@LOCATION@@
+      OPS_RG=@@OPS_RG@@
+      CLUSTER_NAME=@@CLUSTER_NAME@@
+      STORAGE_ACCOUNT=@@STORAGE_ACCOUNT@@
+      SCHEMA_REGISTRY=@@SCHEMA_REGISTRY@@
+      SCHEMA_NAMESPACE=@@SCHEMA_NAMESPACE@@
+      AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
+
+  - path: /usr/local/bin/aio-install.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      source /etc/aio.env
+
+      log(){ echo -e "\\e[1;36m==>\\e[0m $*"; }
+
+      # Host tuning
+      log "Kernel tuning + disable swap"
+      grep -q 'fs.inotify.max_user_instances' /etc/sysctl.conf || echo fs.inotify.max_user_instances=8192 | tee -a /etc/sysctl.conf
+      grep -q 'fs.inotify.max_user_watches'  /etc/sysctl.conf || echo fs.inotify.max_user_watches=524288 | tee -a /etc/sysctl.conf
+      grep -q 'fs.file-max'                  /etc/sysctl.conf || echo fs.file-max=100000 | tee -a /etc/sysctl.conf
+      sysctl -p || true
+      swapoff -a || true
+      sed -ri 's/^([^#].*\\s+swap\\s+)/#\\1/' /etc/fstab || true
+
+      # Base deps
+      log "Base packages"
+      apt-get update -y
+      apt-get install -y curl wget git jq ca-certificates apt-transport-https lsb-release gnupg
+
+      # Azure CLI (use managed identity)
+      log "Install Azure CLI"
+      if ! command -v az >/dev/null 2>&1; then
+        curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      fi
+      az config set extension.use_dynamic_install=yes_without_prompt
+
+      log "Login with VM managed identity"
+      az login --identity --allow-no-subscriptions >/dev/null
+      az account set --subscription "$SUBSCRIPTION"
+
+      # Providers (idempotent)
+      for rp in Microsoft.ExtendedLocation Microsoft.Kubernetes Microsoft.KubernetesConfiguration Microsoft.IoTOperations Microsoft.DeviceRegistry Microsoft.SecretSyncController; do
+        az provider register -n "$rp" -o none || true
+      done
+
+      # K3s
+      log "Install K3s"
+      if [[ ! -f /etc/rancher/k3s/k3s.yaml ]]; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode=644" sh -
+      fi
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      until kubectl get nodes | awk 'NR>1{print $2}' | grep -q Ready; do sleep 3; done
+
+      # Helm
+      if ! command -v helm >/dev/null 2>&1; then
+        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      fi
+      # Make local-path default
+      if kubectl get sc local-path >/dev/null 2>&1; then
+        kubectl annotate sc local-path storageclass.kubernetes.io/is-default-class="true" --overwrite || true
+      fi
+
+      # Arc connect + features
+      log "Arc connect"
+      az extension add --name connectedk8s --upgrade -y
+      az extension add --name k8s-extension --upgrade -y
+      az extension add --name k8s-configuration --upgrade -y
+      az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" --resource-group "$OPS_RG"
+
+      log "Enable features"
+      OBJECT_ID=$(az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv)
+      az connectedk8s enable-features -n "$CLUSTER_NAME" -g "$OPS_RG" \
+        --custom-locations-oid "$OBJECT_ID" \
+        --features cluster-connect custom-locations
+
+      # AIO CLI ext + Azure resources
+      log "AIO Azure resources"
+      az extension add --upgrade --name azure-iot-ops --allow-preview True
+
+      if ! az storage account show -n "$STORAGE_ACCOUNT" -g "$OPS_RG" >/dev/null 2>&1; then
+        az storage account create --name "$STORAGE_ACCOUNT" --location "$LOCATION" --resource-group "$OPS_RG" --enable-hierarchical-namespace true -o none
+      fi
+      SA_ID=$(az storage account show --name "$STORAGE_ACCOUNT" -g "$OPS_RG" --query id -o tsv)
+
+      if ! az iot ops schema registry show --name "$SCHEMA_REGISTRY" -g "$OPS_RG" >/dev/null 2>&1; then
+        az iot ops schema registry create --name "$SCHEMA_REGISTRY" --resource-group "$OPS_RG" --registry-namespace "$SCHEMA_NAMESPACE" --sa-resource-id "$SA_ID" -o none
+      fi
+      SR_ID=$(az iot ops schema registry show --name "$SCHEMA_REGISTRY" -g "$OPS_RG" --query id -o tsv)
+
+      if ! az iot ops ns show --name "$AIO_NAMESPACE_NAME" -g "$OPS_RG" >/dev/null 2>&1; then
+        az iot ops ns create -n "$AIO_NAMESPACE_NAME" -g "$OPS_RG" -o none
+      fi
+      NS_ID=$(az iot ops ns show --name "$AIO_NAMESPACE_NAME" -g "$OPS_RG" --query id -o tsv)
+
+      # Initialize AIO (let it own the foundation)
+      log "AIO init"
+      az iot ops init --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG"
+
+      # Create AIO instance
+      log "AIO create"
+      INST_NAME="${CLUSTER_NAME}-instance"
+      if ! az iot ops show -g "$OPS_RG" -n "$INST_NAME" >/dev/null 2>&1; then
+        az iot ops create --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG" --name "$INST_NAME" \
+          --sr-resource-id "$SR_ID" --ns-resource-id "$NS_ID" \
+          --broker-frontend-replicas 1 --broker-frontend-workers 1 \
+          --broker-backend-part 1 --broker-backend-workers 1 --broker-backend-rf 2 \
+          --broker-mem-profile Low
+      fi
+
+      # Simulator + quickstart Bicep
+      log "Simulator + quickstart"
+      kubectl apply -f https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/opc-plc-deployment.yaml
+      wget -q https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/quickstart.bicep -O /root/quickstart.bicep
+
+      EXT_NAME=$(az k8s-extension list -g "$OPS_RG" --cluster-name "$CLUSTER_NAME" --cluster-type connectedClusters --query "[?extensionType == 'microsoft.iotoperations'].name | [0]" -o tsv)
+      INST_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].name" -o tsv)
+      CUSTOM_LOCATION_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].extendedLocation.name" -o tsv | awk -F'/' '{print $NF}')
+
+      az deployment group create \
+        --resource-group "$OPS_RG" \
+        --template-file /root/quickstart.bicep \
+        --parameters clusterName="$CLUSTER_NAME" \
+                     customLocationName="$CUSTOM_LOCATION_NAME" \
+                     aioExtensionName="$EXT_NAME" \
+                     aioInstanceName="$INST_NAME" \
+                     aioNamespaceName="$AIO_NAMESPACE_NAME"
+
+      log "All done."
+runcmd:
+  - [ bash, -lc, "/usr/local/bin/aio-install.sh > /var/log/aio-install.log 2>&1" ]
+final_message: "AIO install finished. See /var/log/aio-install.log"
