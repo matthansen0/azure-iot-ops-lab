@@ -6,61 +6,7 @@ write_files:
     permissions: '0644'
     content: |
       SUBSCRIPTION=@@SUBSCRIPTION@@
-      LOCATION=@@LOCATION@@
-      OPS_RG=@@OPS_RG@@
-      CLUSTER_NAME=@@CLUSTER_NAME@@
-      STORAGE_ACCOUNT=@@STORAGE_ACCOUNT@@
-      SCHEMA_REGISTRY=@@SCHEMA_REGISTRY@@
-      SCHEMA_NAMESPACE=@@SCHEMA_NAMESPACE@@
-      AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
-
-  - path: /usr/local/bin/aio-install.sh
-    permissions: '0755'
-    content: |
-      #!/usr/bin/env bash
-      echo "CLOUD-INIT-TEST" > /tmp/cloud-init-test.txt
-
-
-      set -euo pipefail
-      source /etc/aio.env
-
-      # Azure CLI (use managed identity)
       log(){ echo -e "\e[1;36m==>\e[0m $*"; }
-      log "Install Azure CLI"
-      if ! command -v az >/dev/null 2>&1; then
-        curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-      fi
-      az config set extension.use_dynamic_install=yes_without_prompt
-
-      # Wait for Contributor role assignment using az login and token principalId
-      MAX_WAIT=600  # seconds (10 minutes)
-      WAIT_INTERVAL=10
-      ELAPSED=0
-      echo "Checking for Contributor role assignment..."
-      while true; do
-        az login --identity --allow-no-subscriptions >/dev/null 2>&1 || true
-        az account set --subscription "$SUBSCRIPTION"
-        PRINCIPAL_ID=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r .oid)
-        if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" = "null" ]; then
-          echo "Waiting for managed identity token to be available..."
-        else
-          az role assignment list --assignee "$PRINCIPAL_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION/resourceGroups/$OPS_RG" | grep -q '"roleDefinitionName": "Contributor"'
-          if [ $? -eq 0 ]; then
-            echo "Contributor role assignment detected."
-            break
-          fi
-        fi
-        if [ $ELAPSED -ge $MAX_WAIT ]; then
-          echo "Timed out waiting for Contributor role assignment."
-          exit 1
-        fi
-        sleep $WAIT_INTERVAL
-        ELAPSED=$((ELAPSED + WAIT_INTERVAL))
-      done
-
-      log(){ echo -e "\\e[1;36m==>\\e[0m $*"; }
-
-      # Host tuning
       log "Kernel tuning + disable swap"
       grep -q 'fs.inotify.max_user_instances' /etc/sysctl.conf || echo fs.inotify.max_user_instances=8192 | tee -a /etc/sysctl.conf
       grep -q 'fs.inotify.max_user_watches'  /etc/sysctl.conf || echo fs.inotify.max_user_watches=524288 | tee -a /etc/sysctl.conf
@@ -143,6 +89,36 @@ write_files:
       log "AIO init"
       az iot ops init --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG"
 
+      # Create AIO instance
+      log "AIO create"
+      INST_NAME="${CLUSTER_NAME}-instance"
+      if ! az iot ops show -g "$OPS_RG" -n "$INST_NAME" >/dev/null 2>&1; then
+        az iot ops create --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG" --name "$INST_NAME" \
+          --sr-resource-id "$SR_ID" --ns-resource-id "$NS_ID" \
+          --broker-frontend-replicas 1 --broker-frontend-workers 1 \
+          --broker-backend-part 1 --broker-backend-workers 1 --broker-backend-rf 2 \
+          --broker-mem-profile Low
+      fi
+
+      # Simulator + quickstart Bicep
+      log "Simulator + quickstart"
+      kubectl apply -f https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/opc-plc-deployment.yaml
+      wget -q https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/quickstart.bicep -O /root/quickstart.bicep
+
+      EXT_NAME=$(az k8s-extension list -g "$OPS_RG" --cluster-name "$CLUSTER_NAME" --cluster-type connectedClusters --query "[?extensionType == 'microsoft.iotoperations'].name | [0]" -o tsv)
+      INST_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].name" -o tsv)
+      CUSTOM_LOCATION_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].extendedLocation.name" -o tsv | awk -F'/' '{print $NF}')
+
+      az deployment group create \
+        --resource-group "$OPS_RG" \
+        --template-file /root/quickstart.bicep \
+        --parameters clusterName="$CLUSTER_NAME" \
+                     customLocationName="$CUSTOM_LOCATION_NAME" \
+                     aioExtensionName="$EXT_NAME" \
+                     aioInstanceName="$INST_NAME" \
+                     aioNamespaceName="$AIO_NAMESPACE_NAME"
+
+      log "All done."
       # Create AIO instance
       log "AIO create"
       INST_NAME="${CLUSTER_NAME}-instance"
