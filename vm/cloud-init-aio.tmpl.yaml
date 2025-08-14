@@ -32,16 +32,23 @@ write_files:
       fi
       az config set extension.use_dynamic_install=yes_without_prompt
 
-      # Wait for Contributor role assignment
+      # Wait for Contributor role assignment using az login and token principalId
       MAX_WAIT=600  # seconds (10 minutes)
       WAIT_INTERVAL=10
       ELAPSED=0
       echo "Checking for Contributor role assignment..."
       while true; do
-        az role assignment list --assignee "$(az vm show -d -g "$OPS_RG" -n "$HOSTNAME" --query identity.principalId -o tsv 2>/dev/null)" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION/resourceGroups/$OPS_RG" | grep -q '"roleDefinitionName": "Contributor"'
-        if [ $? -eq 0 ]; then
-          echo "Contributor role assignment detected."
-          break
+        az login --identity --allow-no-subscriptions >/dev/null 2>&1 || true
+        az account set --subscription "$SUBSCRIPTION"
+        PRINCIPAL_ID=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r .oid)
+        if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" = "null" ]; then
+          echo "Waiting for managed identity token to be available..."
+        else
+          az role assignment list --assignee "$PRINCIPAL_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION/resourceGroups/$OPS_RG" | grep -q '"roleDefinitionName": "Contributor"'
+          if [ $? -eq 0 ]; then
+            echo "Contributor role assignment detected."
+            break
+          fi
         fi
         if [ $ELAPSED -ge $MAX_WAIT ]; then
           echo "Timed out waiting for Contributor role assignment."
