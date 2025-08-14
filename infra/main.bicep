@@ -167,9 +167,14 @@ resource assignVmContributor 'Microsoft.Resources/deploymentScripts@2020-10-01' 
         name: 'RG_ID'
         value: resourceGroup().id
       }
+      {
+        name: 'SUBSCRIPTION_ID'
+        value: subscription().subscriptionId
+      }
     ]
     scriptContent: '''
-      az role assignment create --assignee $VM_PRINCIPAL_ID --role "Contributor" --scope $RG_ID
+      az account set --subscription $SUBSCRIPTION_ID
+      az role assignment create --assignee-object-id $VM_PRINCIPAL_ID --assignee-principal-type ServicePrincipal --role "Contributor" --scope $RG_ID
     '''
     forceUpdateTag: uniqueString(vm.name)
   }
