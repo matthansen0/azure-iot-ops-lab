@@ -7,7 +7,6 @@
   "vmSize": { "value": "Standard_D4s_v5" },
   "vmName": { "value": "aio24" },
     "adminUsername": { "value": "azureuser" },
-  "adminPassword": { "value": "<your-password>" },
-  "cloudInitYaml": { "value": "@vm/cloud-init-aio.tmpl.yaml" }
+  "adminPassword": { "value": "<your-password>" }
   }
 }

@@ -20,8 +20,17 @@ write_files:
       #!/usr/bin/env bash
       echo "CLOUD-INIT-TEST" > /tmp/cloud-init-test.txt
 
+
       set -euo pipefail
       source /etc/aio.env
+
+      # Azure CLI (use managed identity)
+      log(){ echo -e "\e[1;36m==>\e[0m $*"; }
+      log "Install Azure CLI"
+      if ! command -v az >/dev/null 2>&1; then
+        curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      fi
+      az config set extension.use_dynamic_install=yes_without_prompt
 
       # Wait for Contributor role assignment
       MAX_WAIT=600  # seconds (10 minutes)
