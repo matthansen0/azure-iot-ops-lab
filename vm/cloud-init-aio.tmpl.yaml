@@ -19,8 +19,28 @@ write_files:
     content: |
       #!/usr/bin/env bash
       echo "CLOUD-INIT-TEST" > /tmp/cloud-init-test.txt
+
       set -euo pipefail
       source /etc/aio.env
+
+      # Wait for Contributor role assignment
+      MAX_WAIT=600  # seconds (10 minutes)
+      WAIT_INTERVAL=10
+      ELAPSED=0
+      echo "Checking for Contributor role assignment..."
+      while true; do
+        az role assignment list --assignee "$(az vm show -d -g "$OPS_RG" -n "$HOSTNAME" --query identity.principalId -o tsv 2>/dev/null)" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION/resourceGroups/$OPS_RG" | grep -q '"roleDefinitionName": "Contributor"'
+        if [ $? -eq 0 ]; then
+          echo "Contributor role assignment detected."
+          break
+        fi
+        if [ $ELAPSED -ge $MAX_WAIT ]; then
+          echo "Timed out waiting for Contributor role assignment."
+          exit 1
+        fi
+        sleep $WAIT_INTERVAL
+        ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+      done
 
       log(){ echo -e "\\e[1;36m==>\\e[0m $*"; }
 
