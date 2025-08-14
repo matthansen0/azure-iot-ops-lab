@@ -47,11 +47,13 @@ cd azure-iot-ops-lab
   az group create --name rg-aioLab --location eastus2
   ```
 
-3. Deploy everything with one command:
+
+3. Deploy everything with one command (injects the actual cloud-init script contents):
   ```bash
   az deployment group create \
     --resource-group rg-aioLab \
     --template-file infra/main.bicep \
+    --parameters cloudInitYaml="@vm/cloud-init-aio.tmpl.yaml" \
     --parameters @infra/main.parameters.json
   ```
 

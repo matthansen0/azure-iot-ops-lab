@@ -18,6 +18,7 @@ write_files:
     permissions: '0755'
     content: |
       #!/usr/bin/env bash
+      echo "CLOUD-INIT-TEST" > /tmp/cloud-init-test.txt
       set -euo pipefail
       source /etc/aio.env
 
