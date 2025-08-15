@@ -1,4 +1,4 @@
-# 🚀 Azure IoT Operations — One‑Shot Lab (Ubuntu 24.04 + K3s + Device Simulation)
+# 🚀 Azure IoT Operations Lab (Ubuntu 24.04 + K3s + Device Simulation)
 
 ![Azure Arc](https://img.shields.io/badge/Azure%20Arc-Enabled-0078D4)
 ![Azure IoT](https://img.shields.io/badge/Azure%20IoT-Operations-0078D4?logo=microsoft-azure&logoColor=white)
