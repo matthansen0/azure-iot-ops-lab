@@ -17,7 +17,6 @@ write_files:
   - path: /usr/local/bin/aio-install.sh
     permissions: '0755'
     content: |
-      #!/usr/bin/env bash
       set -euo pipefail
       source /etc/aio.env
 
@@ -58,6 +57,8 @@ write_files:
       if [[ ! -f /etc/rancher/k3s/k3s.yaml ]]; then
         curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode=644" sh -
       fi
+  # Trap for error logging to serial console
+  trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       until kubectl get nodes | awk 'NR>1{print $2}' | grep -q Ready; do sleep 3; done
 
@@ -136,6 +137,8 @@ write_files:
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."
+    # Trap for error logging to serial console
+    trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
 runcmd:
   - [ bash, -lc, "/usr/local/bin/aio-install.sh > /var/log/aio-install.log 2>&1" ]
 final_message: "AIO install finished. See /var/log/aio-install.log"

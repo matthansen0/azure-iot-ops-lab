@@ -27,6 +27,17 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 
 ---
 
+
+## ⚠️ Prerequisite: Azure CLI Login with Graph Scope
+
+Before running the deployment script, ensure you are logged in to Azure CLI with the required Microsoft Graph scope for role assignments:
+
+```bash
+az login --scope https://graph.microsoft.com//.default
+```
+
+If you skip this step, the script may fail to assign permissions to the VM's managed identity.
+
 ## 🧪 Quick start (Azure Cloud Shell)
 
 ```bash
@@ -36,7 +47,7 @@ chmod +x deploy.sh destroy.sh
 
 ./deploy.sh \
   --subscription "<SUB_ID>" \
-  --location "eastus" \
+  --location "eastus2" \
   --compute-rg "rg-aioCompute" \
   --ops-rg "rg-aioOps" \
   --vm-name "aio24" \

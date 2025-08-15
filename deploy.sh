@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Defaults (override via flags)
 SUBSCRIPTION=""
-LOCATION="eastus"
+LOCATION="eastus2"
 COMPUTE_RG="rg-aioCompute"
 OPS_RG="rg-aioOps"
 VM_NAME="aio24"
@@ -71,6 +71,13 @@ done
 
 [[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" ]] && usage
 
+
+# Preemptive Azure login check
+if ! az account show &>/dev/null; then
+  echo "You are not logged in to Azure CLI. Please complete login."
+  az login || { echo "Azure login failed. Exiting."; exit 1; }
+fi
+
 # Check for SSH key, generate if missing
 if [[ ! -f "$SSH_PUBLIC_KEY" ]]; then
   echo "SSH key not found: $SSH_PUBLIC_KEY"
@@ -91,9 +98,62 @@ az group create -n "$COMPUTE_RG" -l "$LOCATION" -o none
 az group create -n "$OPS_RG" -l "$LOCATION" -o none
 
 echo "==> Create VNet, subnet, NSG"
-az network vnet create -g "$COMPUTE_RG" -n "$VNET_NAME" -l "$LOCATION" \
-  --address-prefixes 10.10.0.0/16 --subnet-name "$SUBNET_NAME" --subnet-prefix 10.10.1.0/24 -o none
-az network nsg create -g "$COMPUTE_RG" -n "$NSG_NAME" -l "$LOCATION" -o none
+
+
+# Create VNet with retry
+for i in {1..5}; do
+  if az network vnet create -g "$COMPUTE_RG" -n "$VNET_NAME" -l "$LOCATION" \
+    --address-prefixes 10.10.0.0/16 --subnet-name "$SUBNET_NAME" --subnet-prefix 10.10.1.0/24 -o none; then
+    break
+  fi
+  echo "VNet creation failed (attempt $i). Retrying in 10s..."
+  sleep 10
+  if [[ $i -eq 5 ]]; then
+    echo "VNet creation failed after 5 attempts. Exiting."
+    exit 1
+  fi
+done
+
+# Create NSG with retry
+for i in {1..5}; do
+  if az network nsg create -g "$COMPUTE_RG" -n "$NSG_NAME" -l "$LOCATION" -o none; then
+    break
+  fi
+  echo "NSG creation failed (attempt $i). Retrying in 10s..."
+  sleep 10
+  if [[ $i -eq 5 ]]; then
+    echo "NSG creation failed after 5 attempts. Exiting."
+    exit 1
+  fi
+done
+
+# Wait for VNet to be available
+for i in {1..10}; do
+  if az network vnet show -g "$COMPUTE_RG" -n "$VNET_NAME" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for VNet to be available..."
+  sleep 5
+done
+
+# Wait for NSG to be available
+for i in {1..10}; do
+  if az network nsg show -g "$COMPUTE_RG" -n "$NSG_NAME" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for NSG to be available..."
+  sleep 5
+done
+
+
+# Extra wait for NSG propagation before creating rules
+for i in {1..10}; do
+  if az network nsg show -g "$COMPUTE_RG" -n "$NSG_NAME" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for NSG to be fully propagated before rule creation..."
+  sleep 5
+done
 
 # Restrict SSH to current IP
 MYIP=$(curl -s https://ifconfig.me || echo "0.0.0.0")
@@ -103,12 +163,30 @@ az network nsg rule create -g "$COMPUTE_RG" --nsg-name "$NSG_NAME" -n allow_ssh_
   --destination-address-prefixes '*' --destination-port-ranges 22 -o none
 
 echo "==> Public IP + NIC"
+
+# Create Public IP and wait for it to be available
 az network public-ip create -g "$COMPUTE_RG" -n "$PIP_NAME" -l "$LOCATION" --sku Standard --zone 1 2 3 -o none
+for i in {1..10}; do
+  if az network public-ip show -g "$COMPUTE_RG" -n "$PIP_NAME" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for Public IP to be available..."
+  sleep 5
+done
+
+# Create NIC and wait for it to be available
 az network nic create -g "$COMPUTE_RG" -n "$NIC_NAME" \
   --vnet-name "$VNET_NAME" --subnet "$SUBNET_NAME" \
   --network-security-group "$NSG_NAME" \
   --public-ip-address "$PIP_NAME" \
   $( [[ "$ENABLE_ACCEL_NET" == "true" ]] && echo --accelerated-networking true ) -o none
+for i in {1..10}; do
+  if az network nic show -g "$COMPUTE_RG" -n "$NIC_NAME" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for NIC to be available..."
+  sleep 5
+done
 
 echo "==> Prepare cloud-init from template"
 TMP_CI="$(mktemp)"
@@ -134,13 +212,24 @@ az vm create \
   --assign-identity \
   --custom-data "$TMP_CI" \
   --public-ip-sku Standard \
+  --boot-diagnostics-storage "$STORAGE_ACCOUNT" \
   -o jsonc | jq '{name: .name, publicIp: .publicIpAddress, fqdns: .fqdns}'
 
-# Assign the VM's managed identity rights on the Ops RG
+
+# Assign the VM's managed identity rights on the Ops RG with retry
 echo "==> Grant VM identity Contributor on $OPS_RG"
 PRINCIPAL_ID=$(az vm show -g "$COMPUTE_RG" -n "$VM_NAME" --query identity.principalId -o tsv)
 OPS_SCOPE=$(az group show -n "$OPS_RG" --query id -o tsv)
-az role assignment create --assignee "$PRINCIPAL_ID" --role Contributor --scope "$OPS_SCOPE" -o none || true
+for i in {1..5}; do
+  if az role assignment create --assignee "$PRINCIPAL_ID" --role Contributor --scope "$OPS_SCOPE" -o none; then
+    break
+  fi
+  echo "Role assignment failed (attempt $i). Retrying in 10s..."
+  sleep 10
+  if [[ $i -eq 5 ]]; then
+    echo "Role assignment failed after 5 attempts. Please check your Azure credentials and permissions."
+  fi
+done
 
 echo "==> Done. Cloud-init is configuring AIO inside the VM now."
 echo "Check progress via: az serial-console connect -g $COMPUTE_RG -n $VM_NAME  (Portal) or SSH and 'sudo journalctl -u cloud-final -f'"
