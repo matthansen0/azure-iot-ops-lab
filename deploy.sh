@@ -88,7 +88,7 @@ fi
 echo "==> Setting subscription"
 az account set --subscription "$SUBSCRIPTION"
 
-echo "==> Global provider registration (idempotent)"
+echo "==> Global provider registration"
 for rp in Microsoft.ExtendedLocation Microsoft.Kubernetes Microsoft.KubernetesConfiguration Microsoft.IoTOperations Microsoft.DeviceRegistry Microsoft.Storage Microsoft.Network; do
   az provider register -n "$rp" -o none || true
 done
@@ -220,5 +220,6 @@ az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -
 
 
 
-echo "==> Done. Cloud-init is configuring AIO inside the VM now."
-echo "Check progress via: az serial-console connect -g $COMPUTE_RG -n $VM_NAME  (Portal) or SSH and 'sudo journalctl -u cloud-final -f'"
+echo "==> Done. Now login and run the AIO install script."
+echo "Via SSH: ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>"
+echo "or Serial Console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"

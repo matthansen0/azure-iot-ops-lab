@@ -5,10 +5,7 @@
 ![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420)
 ![K3s](https://img.shields.io/badge/Kubernetes-K3s-326CE5)
 
-
 Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure IoT Operations** (AIO) lab: K3s, Arc connect, AIO foundation, the **embedded quickstarts** (devices, assets, data flow), and a simulator — all from **Azure Cloud Shell** with two scripts. Tear it down with one more.
-
-
 
 ---
 
@@ -21,24 +18,25 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
   - **[Configure your cluster (quickstart)](https://learn.microsoft.com/azure/iot-operations/get-started-end-to-end-sample/quickstart-configure)**
 
 > [!NOTE]
-> *There is existing automated builds in the above documentation to run this in Codespaces, but the purpose of this repo is to build it out in a VM for a longer-term lab.* 
-
-
+> *There is existing automated builds in the above documentation to run this in Codespaces, but the purpose of this repo is to build it out in a VM for a longer-term lab.*
 
 ---
 
-
-
 ## ⚠️ Prerequisite: Azure CLI Login
 
-Before running the deployment script, ensure you are logged in to Azure CLI:
+The assumption is that this deployment will be done from a bash shell in Azure Cloud Shell. If not, make sure before running the deployment script, that you've logged in to Azure CLI and get a refreshed token:
 
 ```bash
 az login
 ```
 
-You will use your own user credentials for all Azure operations inside the VM (no managed identity required).
+---
 
+## 🔒 Lab Security notes
+
+- This lab uses your own Azure user credentials for all operations.
+- SSH access to the VM is opened via a Network Security Group (NSG) rule.
+- A local SSH key pair is generated on your local machine for authentication.
 
 ## 🧪 Quick start
 
@@ -62,14 +60,19 @@ chmod +x deploy.sh destroy.sh
 
 ### SSH into the VM and run the install script
 
-
 ```bash
 # If you used the default key:
 ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
+```
+
+```bash
+#Execute the script, authorized via device code.
 sudo bash /usr/local/bin/aio-install.sh
 ```
 
-The script will prompt you to authenticate with Azure using a device code. Follow the instructions in your browser.
+The script will prompt you to authenticate with Azure using a device code, and will take between 25-45 minutes to complete.
+
+![Install Script](media/install-script.png)
 
 ### Verify (optional)
 
@@ -83,7 +86,6 @@ kubectl get pods -n cert-manager
 # In Azure
 az iot ops list -g rg-aioOps -o table
 ```
-
 
 > View install logs on the VM:
 >
@@ -101,3 +103,10 @@ az iot ops list -g rg-aioOps -o table
 ```bash
 ./destroy.sh --compute-rg "rg-aioCompute" --ops-rg "rg-aioOps"
 ```
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! If you have suggestions, bug reports, or improvements, please open an issue or submit a pull request. For major changes, please open an issue first to discuss what you would like to change.
+
+Please ensure your pull request adheres to the existing style and includes relevant documentation or examples where appropriate.
