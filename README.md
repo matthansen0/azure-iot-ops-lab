@@ -24,7 +24,7 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 
 ## ⚠️ Prerequisite: Azure CLI Login
 
-The assumption is that this deployment will be done from a bash shell in Azure Cloud Shell. If not, make sure before running the deployment script, that you've logged in to Azure CLI and get a refreshed token:
+The assumption is that this deployment will be done from bash in Azure Cloud Shell. If not, make sure before running the deployment script, that you've logged in to Azure CLI and get a refreshed token:
 
 ```bash
 az login
