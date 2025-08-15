@@ -16,11 +16,13 @@ write_files:
 
   - path: /usr/local/bin/aio-install.sh
     permissions: '0755'
+
     content: |
       set -euo pipefail
+      trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
       source /etc/aio.env
 
-      log(){ echo -e "\\e[1;36m==>\\e[0m $*"; }
+      log(){ echo -e "\e[1;36m==>\e[0m $*"; }
 
       # Host tuning
       log "Kernel tuning + disable swap"
@@ -36,15 +38,15 @@ write_files:
       apt-get update -y
       apt-get install -y curl wget git jq ca-certificates apt-transport-https lsb-release gnupg
 
-      # Azure CLI (use managed identity)
+      # Azure CLI
       log "Install Azure CLI"
       if ! command -v az >/dev/null 2>&1; then
         curl -sL https://aka.ms/InstallAzureCLIDeb | bash
       fi
       az config set extension.use_dynamic_install=yes_without_prompt
 
-      log "Login with VM managed identity"
-      az login --identity --allow-no-subscriptions >/dev/null
+      log "Login with your Azure user account (device code)"
+      az login --use-device-code
       az account set --subscription "$SUBSCRIPTION"
 
       # Providers (idempotent)
@@ -57,8 +59,6 @@ write_files:
       if [[ ! -f /etc/rancher/k3s/k3s.yaml ]]; then
         curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode=644" sh -
       fi
-  # Trap for error logging to serial console
-  trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       until kubectl get nodes | awk 'NR>1{print $2}' | grep -q Ready; do sleep 3; done
 
@@ -78,11 +78,41 @@ write_files:
       az extension add --name k8s-configuration --upgrade -y
       az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" --resource-group "$OPS_RG"
 
-      log "Enable features"
+      log "Enable features (retry up to 15 minutes, refresh token every 5 attempts)"
       OBJECT_ID=$(az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv)
-      az connectedk8s enable-features -n "$CLUSTER_NAME" -g "$OPS_RG" \
-        --custom-locations-oid "$OBJECT_ID" \
-        --features cluster-connect custom-locations
+      MAX_ATTEMPTS=30  # 15 minutes at 30s per attempt
+      for i in $(seq 1 $MAX_ATTEMPTS); do
+        set +e
+        OUTFILE="/tmp/arc_enable_features.out"
+        az connectedk8s enable-features -n "$CLUSTER_NAME" -g "$OPS_RG" \
+          --custom-locations-oid "$OBJECT_ID" \
+          --features cluster-connect custom-locations > "$OUTFILE" 2>&1
+        STATUS=$?
+        set -e
+        if [ $STATUS -eq 0 ]; then
+          echo "Arc features enabled successfully (attempt $i)."
+          break
+        fi
+        # Refresh IMDS token every 5 attempts
+        if (( i % 5 == 0 )); then
+          echo "Refreshing IMDS token (attempt $i)..."
+          curl -s -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com" || true
+          az login --identity --allow-no-subscriptions >/dev/null
+        fi
+        # Check for insufficient privileges error in both output and log
+        if grep -q "Insufficient privileges" "$OUTFILE" || grep -q "Insufficient privileges" /var/log/aio-install.log 2>/dev/null; then
+          echo "Insufficient privileges to enable Arc features (attempt $i). Waiting 30s and retrying..."
+          sleep 30
+        else
+          echo "az connectedk8s enable-features failed for another reason. See $OUTFILE and log for details."
+          cat "$OUTFILE"
+          exit 1
+        fi
+        if [[ $i -eq $MAX_ATTEMPTS ]]; then
+          echo "ERROR: Could not enable Arc features after $MAX_ATTEMPTS attempts (15 minutes). Exiting."
+          exit 1
+        fi
+      done
 
       # AIO CLI ext + Azure resources
       log "AIO Azure resources"
@@ -137,8 +167,6 @@ write_files:
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."
-    # Trap for error logging to serial console
-    trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
 runcmd:
   - [ bash, -lc, "/usr/local/bin/aio-install.sh > /var/log/aio-install.log 2>&1" ]
 final_message: "AIO install finished. See /var/log/aio-install.log"

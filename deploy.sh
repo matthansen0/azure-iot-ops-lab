@@ -212,22 +212,40 @@ az vm create \
   --assign-identity \
   --custom-data "$TMP_CI" \
   --public-ip-sku Standard \
-  --boot-diagnostics-storage "$STORAGE_ACCOUNT" \
   -o jsonc | jq '{name: .name, publicIp: .publicIpAddress, fqdns: .fqdns}'
 
+echo "==> Enable managed boot diagnostics on VM (post-create)"
+az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -o none
 
-# Assign the VM's managed identity rights on the Ops RG with retry
-echo "==> Grant VM identity Contributor on $OPS_RG"
+
+
+# Assign the VM's managed identity Owner rights on the Ops RG with retry
+echo "==> Grant VM identity Owner on $OPS_RG"
 PRINCIPAL_ID=$(az vm show -g "$COMPUTE_RG" -n "$VM_NAME" --query identity.principalId -o tsv)
 OPS_SCOPE=$(az group show -n "$OPS_RG" --query id -o tsv)
 for i in {1..5}; do
-  if az role assignment create --assignee "$PRINCIPAL_ID" --role Contributor --scope "$OPS_SCOPE" -o none; then
+  if az role assignment create --assignee "$PRINCIPAL_ID" --role Owner --scope "$OPS_SCOPE" -o none; then
     break
   fi
   echo "Role assignment failed (attempt $i). Retrying in 10s..."
   sleep 10
   if [[ $i -eq 5 ]]; then
     echo "Role assignment failed after 5 attempts. Please check your Azure credentials and permissions."
+  fi
+done
+
+# Assign Owner at the subscription level for Arc/Custom Locations enablement
+echo "==> Grant VM identity Owner at subscription scope (for Arc/Custom Locations enablement)"
+# NOTE: Remove this after deployment if you want to reduce permissions
+SUB_SCOPE="/subscriptions/$SUBSCRIPTION"
+for i in {1..5}; do
+  if az role assignment create --assignee "$PRINCIPAL_ID" --role Owner --scope "$SUB_SCOPE" -o none; then
+    break
+  fi
+  echo "Owner role assignment at subscription failed (attempt $i). Retrying in 10s..."
+  sleep 10
+  if [[ $i -eq 5 ]]; then
+    echo "Owner role assignment at subscription failed after 5 attempts. Please check your Azure credentials and permissions."
   fi
 done
 

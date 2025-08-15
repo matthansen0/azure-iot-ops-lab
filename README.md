@@ -28,23 +28,26 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 ---
 
 
-## ⚠️ Prerequisite: Azure CLI Login with Graph Scope
 
-Before running the deployment script, ensure you are logged in to Azure CLI with the required Microsoft Graph scope for role assignments:
+## ⚠️ Prerequisite: Azure CLI Login
+
+Before running the deployment script, ensure you are logged in to Azure CLI:
 
 ```bash
-az login --scope https://graph.microsoft.com//.default
+az login
 ```
 
-If you skip this step, the script may fail to assign permissions to the VM's managed identity.
+You will use your own user credentials for all Azure operations inside the VM (no managed identity required).
 
-## 🧪 Quick start (Azure Cloud Shell)
+
+## 🧪 Quick start
 
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
 chmod +x deploy.sh destroy.sh
 
+# Deploy the VM and copy the install script (does NOT run the install automatically)
 ./deploy.sh \
   --subscription "<SUB_ID>" \
   --location "eastus2" \
@@ -56,6 +59,15 @@ chmod +x deploy.sh destroy.sh
   --schema-registry "aioqs-sr" \
   --schema-namespace "aioqs-ns"
 ```
+
+### SSH into the VM and run the install script manually
+
+```bash
+ssh azureuser@<VM_PUBLIC_IP>
+sudo bash /usr/local/bin/aio-install.sh
+```
+
+The script will prompt you to authenticate with Azure using a device code. Follow the instructions in your browser.
 
 ### Verify (optional)
 
@@ -70,11 +82,11 @@ kubectl get pods -n cert-manager
 az iot ops list -g rg-aioOps -o table
 ```
 
-> View progress logs on the VM:
+
+> View install logs on the VM:
 >
 > ```bash
-> sudo journalctl -u cloud-final -f
-> sudo tail -f /var/log/aio-install.log
+> tail -40 /var/log/aio-install.log
 > ```
 
 > [!TIP]
@@ -92,11 +104,11 @@ Because the VM uses a **system‑assigned** identity, deleting the VM deletes it
 
 ---
 
+
 ## 🔐 Lab Authentication
 
-- `deploy.sh` enables a **System‑Assigned Managed Identity** on the VM and grants it rights on the **Ops RG**.  
-- On first boot, `cloud-init` runs inside the VM and uses **`az login --identity`** to perform all control‑plane actions (Arc connect, AIO resources, quickstarts).  
-- You can tighten RBAC later (e.g., use the Arc Onboarding + AIO Onboarding roles), but **Contributor on the Ops RG** keeps the sample simple for a lab environment.
+- All Azure operations inside the VM are performed using your own user credentials (via `az login --use-device-code`).
+- No managed identity is required for the VM.
 
 ---
 
