@@ -93,12 +93,6 @@ write_files:
           echo "Arc features enabled successfully (attempt $i)."
           break
         fi
-        # Refresh IMDS token every 5 attempts
-        if (( i % 5 == 0 )); then
-          echo "Refreshing IMDS token (attempt $i)..."
-          curl -s -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com" || true
-          az login --identity --allow-no-subscriptions >/dev/null
-        fi
         # Check for insufficient privileges error in both output and log
         if grep -q "Insufficient privileges" "$OUTFILE" || grep -q "Insufficient privileges" /var/log/aio-install.log 2>/dev/null; then
           echo "Insufficient privileges to enable Arc features (attempt $i). Waiting 30s and retrying..."

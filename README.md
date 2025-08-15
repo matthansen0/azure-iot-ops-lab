@@ -60,10 +60,12 @@ chmod +x deploy.sh destroy.sh
   --schema-namespace "aioqs-ns"
 ```
 
-### SSH into the VM and run the install script manually
+### SSH into the VM and run the install script
+
 
 ```bash
-ssh azureuser@<VM_PUBLIC_IP>
+# If you used the default key:
+ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 sudo bash /usr/local/bin/aio-install.sh
 ```
 
@@ -99,28 +101,3 @@ az iot ops list -g rg-aioOps -o table
 ```bash
 ./destroy.sh --compute-rg "rg-aioCompute" --ops-rg "rg-aioOps"
 ```
-
-Because the VM uses a **system‑assigned** identity, deleting the VM deletes its identity; RG‑scoped role assignments are removed with the RG. (If you granted extra roles at broader scopes, remove those first.)
-
----
-
-
-## 🔐 Lab Authentication
-
-- All Azure operations inside the VM are performed using your own user credentials (via `az login --use-device-code`).
-- No managed identity is required for the VM.
-
----
-
-## 🧰 Troubleshooting
-
-- General AIO health & config checks:  
-  - `az iot ops check`  
-  - `az iot ops support create-bundle`  
-- If a run failed during AIO init/create and you see “multiple extensions” errors, delete the lab RGs with `destroy.sh` and redeploy (fastest in a lab).
-
----
-
-## 💸 Cost & limits
-
-Expect charges for the VM and Azure resources in the Ops Resource Group (Storage, Event Hubs created by the quickstart). Power off the VM when not in use, and use `destroy.sh` when you’re done and want to delete everything.
