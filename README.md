@@ -24,7 +24,7 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 
 ## ⚠️ Prerequisite: Azure CLI Login
 
-The assumption is that this deployment will be done from bash in Azure Cloud Shell. If not, make sure before running the deployment script, that you've logged in to Azure CLI and get a refreshed token:
+The assumption is that this deployment will be done from bash in Azure Cloud Shell. Even if you are in Cloud Shell already, it's a good idea before running the deployment script to make sure that you've logged in to Azure CLI, to set the subscription and get a refreshed token:
 
 ```bash
 az login
@@ -44,8 +44,10 @@ az login
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
 chmod +x deploy.sh destroy.sh
+```
 
-# Deploy the VM and copy the install script (does NOT run the install automatically)
+```bash
+# Deploy the VM and copy the install script
 ./deploy.sh \
   --subscription "<SUB_ID>" \
   --location "eastus2" \
@@ -61,7 +63,6 @@ chmod +x deploy.sh destroy.sh
 ### SSH into the VM and run the install script
 
 ```bash
-# If you used the default key:
 ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 ```
 
@@ -70,7 +71,7 @@ ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 sudo bash /usr/local/bin/aio-install.sh
 ```
 
-The script will prompt you to authenticate with Azure using a device code, and will take between 25-45 minutes to complete.
+The script will prompt you to authenticate with Azure using a device code, and will take between 30-45 minutes to complete.
 
 ![Install Script](media/install-script.png)
 
@@ -94,7 +95,7 @@ az iot ops list -g rg-aioOps -o table
 > ```
 
 > [!TIP]
-> You will be able to see finalized progress of the deployment once there is device messages being sent into the IoT Hub. 
+> You will be able to see finalized progress of the deployment once there is device messages being sent into the IoT Hub.
 
 ---
 
@@ -103,6 +104,7 @@ az iot ops list -g rg-aioOps -o table
 ```bash
 ./destroy.sh --compute-rg "rg-aioCompute" --ops-rg "rg-aioOps"
 ```
+
 ---
 
 ## 🤝 Contributing
@@ -110,3 +112,11 @@ az iot ops list -g rg-aioOps -o table
 Contributions are welcome! If you have suggestions, bug reports, or improvements, please open an issue or submit a pull request. For major changes, please open an issue first to discuss what you would like to change.
 
 Please ensure your pull request adheres to the existing style and includes relevant documentation or examples where appropriate.
+
+---
+
+## 📝 To-Do
+
+- [ ] Add "next steps" automation for data ingestion and visualization
+- [ ] Add support for password Azure-managed SSH key resources for VM login
+- [ ] Add cost estimation or resource summary
