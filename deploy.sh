@@ -7,6 +7,7 @@ LOCATION="eastus2"
 COMPUTE_RG="rg-aioCompute"
 OPS_RG="rg-aioOps"
 VM_NAME="aio24"
+AIO_LAWORKSPACE="aio-laworkspace"
 VNET_NAME="${VM_NAME}-vnet"
 SUBNET_NAME="subnet"
 NSG_NAME="${VM_NAME}-nsg"
@@ -96,6 +97,28 @@ done
 echo "==> Create resource groups"
 az group create -n "$COMPUTE_RG" -l "$LOCATION" -o none
 az group create -n "$OPS_RG" -l "$LOCATION" -o none
+
+# Create Log Analytics workspace (idempotent)
+echo "==> Create Log Analytics workspace in $OPS_RG"
+az monitor log-analytics workspace create \
+  --resource-group "$OPS_RG" \
+  --workspace-name "$AIO_LAWORKSPACE" \
+  --location "$LOCATION" \
+  --sku PerGB2018 \
+  -o none
+
+# Wait for Log Analytics workspace to be available
+for i in {1..10}; do
+  if az monitor log-analytics workspace show --resource-group "$OPS_RG" --workspace-name "$AIO_LAWORKSPACE" &>/dev/null; then
+    break
+  fi
+  echo "Waiting for Log Analytics workspace to be available..."
+  sleep 5
+  if [[ $i -eq 10 ]]; then
+    echo "Log Analytics workspace creation timed out. Exiting."
+    exit 1
+  fi
+done
 
 echo "==> Create VNet, subnet, NSG"
 
