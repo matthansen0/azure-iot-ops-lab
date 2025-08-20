@@ -103,27 +103,6 @@ az iot ops list -g rg-aioOps -o table
 
 ---
 
-## 📊 Next Steps: Get Insights
-
-
-After deploying and running the lab, a Log Analytics workspace is automatically created for you in the ops resource group. You can quickly get started with the Azure IoT Operations "Get Insights" tutorial:
-
-1. You will exit SSH, and go back to the cloud shell, then run the provided script to check for required extensions, find your Log Analytics workspace, and run a sample query:
-
-*Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)*
-
-  ```bash
-  ./get-insights.sh rg-aioOps
-  ```
-
-
-2. Explore more insights and queries as described in the official docs:
-   https://learn.microsoft.com/en-us/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights
-
-The script will output the latest IoT Operations logs from your deployment. You can modify the query or use the Azure Portal for deeper analysis.
-
----
-
 ## 🗑️ Clean up
 
 ```bash
