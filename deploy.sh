@@ -99,7 +99,7 @@ az group create -n "$COMPUTE_RG" -l "$LOCATION" -o none
 az group create -n "$OPS_RG" -l "$LOCATION" -o none
 
 # Create Log Analytics workspace (idempotent)
-echo "==> Create Log Analytics workspace in $OPS_RG"
+echo "==> Create Log Analytics workspace"
 az monitor log-analytics workspace create \
   --resource-group "$OPS_RG" \
   --workspace-name "$AIO_LAWORKSPACE" \
@@ -236,7 +236,7 @@ az vm create \
   --public-ip-sku Standard \
   -o jsonc | jq '{name: .name, publicIp: .publicIpAddress, fqdns: .fqdns}'
 
-echo "==> Enable managed boot diagnostics on VM (post-create)"
+echo "==> Enable managed boot diagnostics on VM"
 az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -o none
 
 

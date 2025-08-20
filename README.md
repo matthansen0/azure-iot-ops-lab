@@ -43,11 +43,12 @@ az login
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x deploy.sh destroy.sh
+chmod +x deploy.sh destroy.sh get-insights.sh
 ```
 
+*Deploy the VM and copy the install script*
+
 ```bash
-# Deploy the VM and copy the install script
 ./deploy.sh \
   --subscription "<SUB_ID>" \
   --location "eastus2" \
@@ -108,7 +109,6 @@ After deploying and running the lab, a Log Analytics workspace is automatically 
 *Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)*
 
   ```bash
-  chmod +x get-insights.sh
   ./get-insights.sh rg-aioOps
   ```
 
