@@ -161,10 +161,22 @@ write_files:
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."
-      # Configure diagnostic settings for AIO instance to Log Analytics
-      log "Configuring diagnostic settings for AIO instance to Log Analytics workspace"
-      WORKSPACE_ID=$(az monitor log-analytics workspace show -g "$OPS_RG" -n "aio-laworkspace" --query id -o tsv)
-      AIO_INSTANCE_ID=$(az iot ops show -g "$OPS_RG" -n "$INST_NAME" --query id -o tsv)
+
+      # Wait for IoTOperationsLogs table to appear in Log Analytics
+      log "Waiting for IoTOperationsLogs table to be created in Log Analytics workspace..."
+      WORKSPACE_ID=$(az monitor log-analytics workspace show -g "$OPS_RG" -n "aio-laworkspace" --query customerId -o tsv)
+      for i in {1..30}; do
+        TABLE_EXISTS=$(az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query ".show tables | where TableName == 'IoTOperationsLogs'" --output tsv 2>/dev/null | grep IoTOperationsLogs || true)
+        if [[ -n "$TABLE_EXISTS" ]]; then
+          log "IoTOperationsLogs table is now available."
+          break
+        fi
+        log "Table not found yet (attempt $i). Waiting 20s..."
+        sleep 20
+        if [[ $i -eq 30 ]]; then
+          log "Timed out waiting for IoTOperationsLogs table."
+        fi
+      done
       if [[ -n "$WORKSPACE_ID" && -n "$AIO_INSTANCE_ID" ]]; then
         az monitor diagnostic-settings create \
           --name "aio-logs-to-law" \
