@@ -67,7 +67,6 @@ ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 ```
 
 ```bash
-#Execute the script, authorized via device code.
 sudo bash /usr/local/bin/aio-install.sh
 ```
 
@@ -104,12 +103,19 @@ az iot ops list -g rg-aioOps -o table
 
 After deploying and running the lab, a Log Analytics workspace is automatically created for you in the ops resource group. You can quickly get started with the Azure IoT Operations "Get Insights" tutorial:
 
+> **Note:** If you have not already, make the script executable:
+> ```bash
+> chmod +x get-insights.sh
+> ```
+
 1. Run the provided script to check for required extensions, find your Log Analytics workspace, and run a sample query:
 
+*Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)*
+
   ```bash
-  ./get-insights.sh [resource-group]
-  # Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)
+  ./get-insights.sh rg-aioOps
   ```
+
 
 2. Explore more insights and queries as described in the official docs:
    https://learn.microsoft.com/en-us/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights
