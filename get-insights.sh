@@ -10,6 +10,12 @@ RESOURCE_GROUP="${1:-rg-aioOps}"
 
 # Check for required extensions
 az extension add --name azure-iot-ops --upgrade --allow-preview true -y
+# Ensure log-analytics extension is installed (allow preview)
+if ! az extension show --name log-analytics &>/dev/null; then
+  az extension add --name log-analytics --allow-preview true -y
+else
+  az extension update --name log-analytics --allow-preview true -y
+fi
 
 # Find Log Analytics workspace in the resource group
 

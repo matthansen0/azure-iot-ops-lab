@@ -161,6 +161,21 @@ write_files:
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."
+      # Configure diagnostic settings for AIO instance to Log Analytics
+      log "Configuring diagnostic settings for AIO instance to Log Analytics workspace"
+      WORKSPACE_ID=$(az monitor log-analytics workspace show -g "$OPS_RG" -n "aio-laworkspace" --query id -o tsv)
+      AIO_INSTANCE_ID=$(az iot ops show -g "$OPS_RG" -n "$INST_NAME" --query id -o tsv)
+      if [[ -n "$WORKSPACE_ID" && -n "$AIO_INSTANCE_ID" ]]; then
+        az monitor diagnostic-settings create \
+          --name "aio-logs-to-law" \
+          --resource "$AIO_INSTANCE_ID" \
+          --workspace "$WORKSPACE_ID" \
+          --logs '[{"category": "AllLogs", "enabled": true}]' \
+          --metrics '[{"category": "AllMetrics", "enabled": true}]' || true
+        log "Diagnostic settings configured."
+      else
+        log "Could not configure diagnostic settings: missing workspace or instance ID."
+      fi
 runcmd:
   - [ bash, -lc, "/usr/local/bin/aio-install.sh > /var/log/aio-install.log 2>&1" ]
 final_message: "AIO install finished. See /var/log/aio-install.log"
