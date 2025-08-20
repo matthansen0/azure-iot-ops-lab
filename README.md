@@ -7,6 +7,10 @@
 
 Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure IoT Operations** (AIO) lab: K3s, Arc connect, AIO foundation, the **embedded quickstarts** (devices, assets, data flow), and a simulator — all from **Azure Cloud Shell** with two scripts. Tear it down with one more.
 
+## 🖼️ Architecture Diagram
+
+![Diagram](media/diagram.png)
+
 ---
 
 ## ✨ What this automates
@@ -43,11 +47,12 @@ az login
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x deploy.sh destroy.sh
+chmod +x deploy.sh destroy.sh get-insights.sh
 ```
 
+*Deploy the VM and copy the install script*
+
 ```bash
-# Deploy the VM and copy the install script
 ./deploy.sh \
   --subscription "<SUB_ID>" \
   --location "eastus2" \
@@ -67,7 +72,6 @@ ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 ```
 
 ```bash
-#Execute the script, authorized via device code.
 sudo bash /usr/local/bin/aio-install.sh
 ```
 
@@ -96,6 +100,27 @@ az iot ops list -g rg-aioOps -o table
 
 > [!TIP]
 > You will be able to see finalized progress of the deployment once there is device messages being sent into the IoT Hub.
+
+---
+
+## 📊 Next Steps: Get Insights
+
+
+After deploying and running the lab, a Log Analytics workspace is automatically created for you in the ops resource group. You can quickly get started with the Azure IoT Operations "Get Insights" tutorial:
+
+1. You will exit SSH, and go back to the cloud shell, then run the provided script to check for required extensions, find your Log Analytics workspace, and run a sample query:
+
+*Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)*
+
+  ```bash
+  ./get-insights.sh rg-aioOps
+  ```
+
+
+2. Explore more insights and queries as described in the official docs:
+   https://learn.microsoft.com/en-us/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights
+
+The script will output the latest IoT Operations logs from your deployment. You can modify the query or use the Azure Portal for deeper analysis.
 
 ---
 
