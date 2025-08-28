@@ -124,4 +124,4 @@ Please ensure your pull request adheres to the existing style and includes relev
 - [ ] Add "next steps" automation for data ingestion and visualization
 - [ ] Add support for password Azure-managed SSH key resources for VM login
 - [ ] Add cost estimation or resource summary
-- [ ] Create architecture diagram
+- [x] Create architecture diagram
