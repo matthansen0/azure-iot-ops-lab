@@ -47,7 +47,7 @@ az login
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x deploy.sh destroy.sh get-insights.sh
+chmod +x *.sh
 ```
 
 *Deploy the VM and copy the install script*
