@@ -25,6 +25,9 @@ SCHEMA_REGISTRY="aioqs-sr"
 SCHEMA_NAMESPACE="aioqs-ns"
 CLUSTER_NAME="aio-k3s"
 AIO_NAMESPACE_NAME="myqsnamespace"
+KEYVAULT_NAME=""
+SECRET_SYNC_MI_NAME=""
+CLOUD_MI_NAME=""
 
 usage() {
   cat <<EOF
@@ -46,6 +49,9 @@ Optional:
   --schema-registry         Schema Registry name (default: $SCHEMA_REGISTRY)
   --schema-namespace        Schema Registry namespace (default: $SCHEMA_NAMESPACE)
   --aio-namespace           Device Registry namespace (default: $AIO_NAMESPACE_NAME)
+  --keyvault-name           Key Vault name for secrets sync (required)
+  --secret-mi-name          User-assigned managed identity for secret sync (default: <cluster>-secret-mi)
+  --cloud-mi-name           User-assigned managed identity for cloud endpoints (default: <cluster>-cloud-mi)
 EOF
   exit 1
 }
@@ -66,11 +72,17 @@ while [[ $# -gt 0 ]]; do
     --schema-namespace) SCHEMA_NAMESPACE="$2"; shift 2;;
     --cluster-name) CLUSTER_NAME="$2"; shift 2;;
     --aio-namespace) AIO_NAMESPACE_NAME="$2"; shift 2;;
+    --keyvault-name) KEYVAULT_NAME="$2"; shift 2;;
+    --secret-mi-name) SECRET_SYNC_MI_NAME="$2"; shift 2;;
+    --cloud-mi-name) CLOUD_MI_NAME="$2"; shift 2;;
     *) echo "Unknown arg: $1"; usage;;
   esac
 done
 
-[[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" ]] && usage
+[[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" || -z "$KEYVAULT_NAME" ]] && usage
+
+[[ -z "$SECRET_SYNC_MI_NAME" ]] && SECRET_SYNC_MI_NAME="${CLUSTER_NAME}-secret-mi"
+[[ -z "$CLOUD_MI_NAME" ]] && CLOUD_MI_NAME="${CLUSTER_NAME}-cloud-mi"
 
 
 # Preemptive Azure login check
@@ -220,7 +232,10 @@ sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
     -e "s|@@STORAGE_ACCOUNT@@|$STORAGE_ACCOUNT|g" \
     -e "s|@@SCHEMA_REGISTRY@@|$SCHEMA_REGISTRY|g" \
     -e "s|@@SCHEMA_NAMESPACE@@|$SCHEMA_NAMESPACE|g" \
-    -e "s|@@AIO_NAMESPACE_NAME@@|$AIO_NAMESPACE_NAME|g" \
+  -e "s|@@AIO_NAMESPACE_NAME@@|$AIO_NAMESPACE_NAME|g" \
+  -e "s|@@KEYVAULT_NAME@@|$KEYVAULT_NAME|g" \
+  -e "s|@@SECRET_SYNC_MI_NAME@@|$SECRET_SYNC_MI_NAME|g" \
+  -e "s|@@CLOUD_MI_NAME@@|$CLOUD_MI_NAME|g" \
     vm/cloud-init-aio.tmpl.yaml > "$TMP_CI"
 
 echo "==> Create VM (Ubuntu 24.04 LTS)"

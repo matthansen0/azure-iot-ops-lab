@@ -13,6 +13,9 @@ write_files:
       SCHEMA_REGISTRY=@@SCHEMA_REGISTRY@@
       SCHEMA_NAMESPACE=@@SCHEMA_NAMESPACE@@
       AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
+      KEYVAULT_NAME=@@KEYVAULT_NAME@@
+      SECRET_SYNC_MI_NAME=@@SECRET_SYNC_MI_NAME@@
+      CLOUD_MI_NAME=@@CLOUD_MI_NAME@@
 
   - path: /usr/local/bin/aio-install.sh
     permissions: '0755'
@@ -23,6 +26,28 @@ write_files:
       source /etc/aio.env
 
       log(){ echo -e "\e[1;36m==>\e[0m $*"; }
+
+      sync_kubeconfig() {
+        local target_config="/root/.kube/config"
+        mkdir -p /root/.kube
+        cp /etc/rancher/k3s/k3s.yaml "$target_config"
+        chmod 600 "$target_config"
+        local cluster_name
+        cluster_name=$(kubectl config view --raw --kubeconfig "$target_config" -o jsonpath='{.clusters[0].name}' 2>/dev/null || true)
+        local internal_ip
+        internal_ip=$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+        if [[ -n "$internal_ip" && -n "$cluster_name" ]]; then
+          kubectl config set-cluster "$cluster_name" --server="https://${internal_ip}:6443" --kubeconfig "$target_config" >/dev/null
+        fi
+        local context_name
+        context_name=$(kubectl config view --raw --kubeconfig "$target_config" -o jsonpath='{.contexts[0].name}' 2>/dev/null || true)
+        if [[ -n "$context_name" ]]; then
+          KUBE_CONTEXT="$context_name"
+        else
+          KUBE_CONTEXT="default"
+        fi
+        export KUBECONFIG="$target_config"
+      }
 
       # Host tuning
       log "Kernel tuning + disable swap"
@@ -54,6 +79,11 @@ write_files:
         az provider register -n "$rp" -o none || true
       done
 
+      # Required extensions
+      log "Ensure Azure CLI extensions"
+      az extension add --name connectedk8s --upgrade -y
+      az extension add --name azure-iot-ops --upgrade --allow-preview True
+
       # K3s
       log "Install K3s"
       if [[ ! -f /etc/rancher/k3s/k3s.yaml ]]; then
@@ -61,6 +91,8 @@ write_files:
       fi
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       until kubectl get nodes | awk 'NR>1{print $2}' | grep -q Ready; do sleep 3; done
+
+      sync_kubeconfig
 
       # Helm
       if ! command -v helm >/dev/null 2>&1; then
@@ -73,10 +105,64 @@ write_files:
 
       # Arc connect + features
       log "Arc connect"
-      az extension add --name connectedk8s --upgrade -y
       az extension add --name k8s-extension --upgrade -y
       az extension add --name k8s-configuration --upgrade -y
       az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" --resource-group "$OPS_RG"
+
+      sync_kubeconfig
+
+      log "Enable OIDC issuer + workload identity"
+      CONTEXT_FOR_ARC="${KUBE_CONTEXT:-default}"
+      [[ -z "$CONTEXT_FOR_ARC" ]] && CONTEXT_FOR_ARC="default"
+      UPDATE_ATTEMPTS=10
+      for attempt in $(seq 1 $UPDATE_ATTEMPTS); do
+        if az connectedk8s update --name "$CLUSTER_NAME" --resource-group "$OPS_RG" \
+             --enable-oidc-issuer --enable-workload-identity \
+             --kube-config /root/.kube/config --kube-context "$CONTEXT_FOR_ARC"; then
+          echo "OIDC issuer and workload identity enabled (attempt $attempt)."
+          break
+        fi
+        if [[ $attempt -eq $UPDATE_ATTEMPTS ]]; then
+          echo "ERROR: Failed to enable OIDC issuer/workload identity after $UPDATE_ATTEMPTS attempts."
+          exit 1
+        fi
+        echo "Enable OIDC/workload identity failed (attempt $attempt). Retrying in 30s..."
+        sleep 30
+      done
+
+      log "Configure K3s API server for workload identity"
+      ISSUER_URL=$(az connectedk8s show -g "$OPS_RG" -n "$CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl -o tsv)
+      if [[ -z "$ISSUER_URL" ]]; then
+        echo "ERROR: Unable to retrieve OIDC issuer URL."
+        exit 1
+      fi
+      TMP_K3S_CFG="/tmp/k3s-config.yaml"
+      printf '%s\n' \
+        "kube-apiserver-arg:" \
+        "  - service-account-issuer=${ISSUER_URL}" \
+        "  - service-account-max-token-expiration=24h" > "$TMP_K3S_CFG"
+      K3S_CFG_PATH="/etc/rancher/k3s/config.yaml"
+      if ! cmp -s "$TMP_K3S_CFG" "$K3S_CFG_PATH" 2>/dev/null; then
+        mv "$TMP_K3S_CFG" "$K3S_CFG_PATH"
+        systemctl restart k3s
+        for attempt in $(seq 1 40); do
+          if kubectl get nodes >/tmp/k3s-nodes.out 2>/dev/null; then
+            if awk 'NR>1{print $2}' /tmp/k3s-nodes.out | grep -q Ready; then
+              rm -f /tmp/k3s-nodes.out
+              break
+            fi
+          fi
+          rm -f /tmp/k3s-nodes.out
+          sleep 3
+          if [[ $attempt -eq 40 ]]; then
+            echo "ERROR: k3s did not become Ready after restart."
+            exit 1
+          fi
+        done
+      else
+        rm -f "$TMP_K3S_CFG"
+      fi
+      sync_kubeconfig
 
       log "Enable features (retry up to 15 minutes, refresh token every 5 attempts)"
       OBJECT_ID=$(az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv)
@@ -110,8 +196,6 @@ write_files:
 
       # AIO CLI ext + Azure resources
       log "AIO Azure resources"
-      az extension add --upgrade --name azure-iot-ops --allow-preview True
-
       if ! az storage account show -n "$STORAGE_ACCOUNT" -g "$OPS_RG" >/dev/null 2>&1; then
         az storage account create --name "$STORAGE_ACCOUNT" --location "$LOCATION" --resource-group "$OPS_RG" --enable-hierarchical-namespace true -o none
       fi
@@ -141,6 +225,50 @@ write_files:
           --broker-backend-part 1 --broker-backend-workers 1 --broker-backend-rf 2 \
           --broker-mem-profile Low
       fi
+      AIO_INSTANCE_NAME="$INST_NAME"
+      AIO_INSTANCE_ID=$(az iot ops show -g "$OPS_RG" -n "$AIO_INSTANCE_NAME" --query id -o tsv)
+
+      # Secure settings prerequisites (Key Vault + identities)
+      log "Configure Key Vault for secure settings"
+      if ! az keyvault show --name "$KEYVAULT_NAME" --resource-group "$OPS_RG" >/dev/null 2>&1; then
+        az keyvault create --name "$KEYVAULT_NAME" --resource-group "$OPS_RG" --location "$LOCATION" --enable-rbac-authorization true --sku standard -o none
+      fi
+      KEYVAULT_ID=$(az keyvault show --name "$KEYVAULT_NAME" --resource-group "$OPS_RG" --query id -o tsv)
+      CURRENT_USER_UPN=$(az account show --query user.name -o tsv 2>/dev/null || true)
+      if [[ -n "$CURRENT_USER_UPN" ]]; then
+        az role assignment create --assignee "$CURRENT_USER_UPN" --role "Key Vault Secrets Officer" --scope "$KEYVAULT_ID" -o none >/dev/null 2>&1 || true
+      fi
+
+      log "Ensure managed identities for secrets and cloud endpoints"
+      if ! az identity show --name "$SECRET_SYNC_MI_NAME" --resource-group "$OPS_RG" >/dev/null 2>&1; then
+        az identity create --name "$SECRET_SYNC_MI_NAME" --resource-group "$OPS_RG" --location "$LOCATION" -o none
+      fi
+      SECRET_MI_ID=$(az identity show --name "$SECRET_SYNC_MI_NAME" --resource-group "$OPS_RG" --query id -o tsv)
+      if ! az identity show --name "$CLOUD_MI_NAME" --resource-group "$OPS_RG" >/dev/null 2>&1; then
+        az identity create --name "$CLOUD_MI_NAME" --resource-group "$OPS_RG" --location "$LOCATION" -o none
+      fi
+      CLOUD_MI_ID=$(az identity show --name "$CLOUD_MI_NAME" --resource-group "$OPS_RG" --query id -o tsv)
+
+      log "Enable AIO secret synchronization"
+      az iot ops secretsync enable --instance "$AIO_INSTANCE_NAME" \
+                                   --resource-group "$OPS_RG" \
+                                   --mi-user-assigned "$SECRET_MI_ID" \
+                                   --kv-resource-id "$KEYVAULT_ID"
+
+      log "Assign cloud connection identity"
+      set +e
+      az iot ops identity assign --name "$AIO_INSTANCE_NAME" \
+                                 --resource-group "$OPS_RG" \
+                                 --mi-user-assigned "$CLOUD_MI_ID"
+      ASSIGN_STATUS=$?
+      set -e
+      if [[ $ASSIGN_STATUS -ne 0 ]]; then
+        echo "WARNING: az iot ops identity assign returned a non-zero status ($ASSIGN_STATUS). Continuing."
+      fi
+      log "Restart schema registry pods to pick up identity"
+      kubectl delete pods -n azure-iot-operations -l app.kubernetes.io/name=adr-schema-registry --ignore-not-found --wait=false || true
+      kubectl wait --for=condition=Ready pods -n azure-iot-operations -l app.kubernetes.io/name=adr-schema-registry --timeout=300s || true
+      sync_kubeconfig
 
       # Simulator + quickstart Bicep
       log "Simulator + quickstart"
@@ -148,8 +276,7 @@ write_files:
       wget -q https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/quickstart.bicep -O /root/quickstart.bicep
 
       EXT_NAME=$(az k8s-extension list -g "$OPS_RG" --cluster-name "$CLUSTER_NAME" --cluster-type connectedClusters --query "[?extensionType == 'microsoft.iotoperations'].name | [0]" -o tsv)
-      INST_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].name" -o tsv)
-      CUSTOM_LOCATION_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].extendedLocation.name" -o tsv | awk -F'/' '{print $NF}')
+      CUSTOM_LOCATION_NAME=$(az iot ops list -g "$OPS_RG" --query "[?name=='$AIO_INSTANCE_NAME'].extendedLocation.name | [0]" -o tsv | awk -F'/' '{print $NF}')
 
       az deployment group create \
         --resource-group "$OPS_RG" \
@@ -157,7 +284,7 @@ write_files:
         --parameters clusterName="$CLUSTER_NAME" \
                      customLocationName="$CUSTOM_LOCATION_NAME" \
                      aioExtensionName="$EXT_NAME" \
-                     aioInstanceName="$INST_NAME" \
+                     aioInstanceName="$AIO_INSTANCE_NAME" \
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."

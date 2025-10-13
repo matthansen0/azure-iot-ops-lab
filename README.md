@@ -14,7 +14,7 @@ Spin up an Ubuntu VM and let it **self‑provision** an end‑to‑end **Azure I
 - **Arc‑enable** a K3s cluster and turn on **cluster‑connect** + **custom locations** features.  
 - Deploy **Azure IoT Operations** (foundation + instance).  
 - Run the two **official AIO quickstarts** end‑to‑end (this repo embeds their steps):
-  - **[Deploy AIO (quickstart)](https://learn.microsoft.com/azure/iot-operations/)** 
+  - **[Deploy AIO (quickstart)](https://learn.microsoft.com/azure/iot-operations/)**
   - **[Configure your cluster (quickstart)](https://learn.microsoft.com/azure/iot-operations/get-started-end-to-end-sample/quickstart-configure)**
 
 > [!NOTE]
@@ -43,10 +43,10 @@ az login
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x deploy.sh destroy.sh get-insights.sh
+chmod +x *.sh
 ```
 
-*Deploy the VM and copy the install script*
+### Deploy the VM and copy the install script
 
 ```bash
 ./deploy.sh \
@@ -58,7 +58,8 @@ chmod +x deploy.sh destroy.sh get-insights.sh
   --ssh-public-key "$HOME/.ssh/id_rsa.pub" \
   --storage-account "aio$(date +%s)" \
   --schema-registry "aioqs-sr" \
-  --schema-namespace "aioqs-ns"
+  --schema-namespace "aioqs-ns" \
+  --keyvault-name "aiokv$(date +%s)"
 ```
 
 ### SSH into the VM and run the install script
@@ -72,6 +73,9 @@ sudo bash /usr/local/bin/aio-install.sh
 ```
 
 The script will prompt you to authenticate with Azure using a device code, and will take between 30-45 minutes to complete.
+
+> [!TIP]
+> Secure settings (Key Vault secrets sync + workload identities) are enabled automatically during the install. Override `--secret-mi-name` / `--cloud-mi-name` on `deploy.sh` if you need custom managed identity names.
 
 ![Install Script](media/install-script.png)
 
@@ -106,15 +110,14 @@ After deploying and running the lab, a Log Analytics workspace is automatically 
 
 1. You will exit SSH, and go back to the cloud shell, then run the provided script to check for required extensions, find your Log Analytics workspace, and run a sample query:
 
-*Default resource group is rg-aioOps; workspace name is always 'aio-laworkspace' (created by deploy.sh)*
+> Default resource group is `rg-aioOps`; workspace name is always `aio-laworkspace` (created by `deploy.sh`).
 
   ```bash
   ./get-insights.sh rg-aioOps
   ```
 
 
-2. Explore more insights and queries as described in the official docs:
-   https://learn.microsoft.com/en-us/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights
+1. Explore more insights and queries as described in the official docs: [Tutorial - Get Insights](https://learn.microsoft.com/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights)
 
 The script will output the latest IoT Operations logs from your deployment. You can modify the query or use the Azure Portal for deeper analysis.
 
