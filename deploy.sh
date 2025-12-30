@@ -283,6 +283,7 @@ if [[ "$ENABLE_FABRIC" == "true" ]]; then
     scp -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" \
       fabric/fabric-api.sh \
       fabric/fabric-dataflow.sh \
+      fabric/fabric-eventstream-setup.sh \
       "${ADMIN_USERNAME}@${VM_PUBLIC_IP}:/tmp/" || echo "Warning: Could not copy Fabric scripts"
     
     ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \

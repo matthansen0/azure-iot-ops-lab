@@ -285,17 +285,29 @@ ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 # Run the setup wizard (provides KQL table schema and instructions)
 sudo /usr/local/bin/fabric-eventstream-setup.sh wizard
 
-# Generate AIO dataflow config with your Eventstream endpoint
-# Replace with your actual Event Hub namespace from Fabric
+# Step 1: Generate the DataflowEndpoint YAML
+# Replace with your Eventstream's Event Hub namespace from Fabric portal
 sudo /usr/local/bin/fabric-dataflow.sh generate-endpoint \
-  "your-eventstream-namespace.servicebus.windows.net"
+  "your-workspace-eventstream.servicebus.windows.net" > /tmp/endpoint.yaml
 
-# Generate and apply the dataflow
+# Review and apply the endpoint
+cat /tmp/endpoint.yaml
+kubectl apply -f /tmp/endpoint.yaml
+
+# Step 2: Generate the Dataflow YAML
+# First arg = endpoint name (from endpoint.yaml metadata.name)
+# Second arg = topic/destination name (typically "destinationeh" or your Event Hub name)
 sudo /usr/local/bin/fabric-dataflow.sh generate-dataflow \
-  "your-eventstream-namespace.servicebus.windows.net" \
-  "aio-eventstream" > /tmp/dataflow.yaml
+  fabric-eventstream-endpoint \
+  destinationeh > /tmp/dataflow.yaml
 
+# Review and apply the dataflow
+cat /tmp/dataflow.yaml
 kubectl apply -f /tmp/dataflow.yaml
+
+# Verify deployment
+kubectl get dataflow -n azure-iot-operations
+kubectl get dataflowendpoint -n azure-iot-operations
 ```
 
 ### Validating the Integration
@@ -316,19 +328,23 @@ kubectl apply -f /tmp/dataflow.yaml
 Once data is flowing, query it in a KQL Queryset:
 
 ```kql
-// Get recent telemetry
+// Get recent telemetry (extract values from dynamic columns)
 OvenTelemetry
-| where timestamp > ago(1h)
-| project timestamp, temperature, weight, energy_use
-| order by timestamp desc
+| extend TempValue = toreal(Temperature.Value),
+         WeightValue = toreal(Weight.Value),
+         EnergyValue = toreal(EnergyUse.Value)
+| where Timestamp > ago(1h)
+| project Timestamp, TempValue, WeightValue, EnergyValue, AssetId
+| order by Timestamp desc
 | take 100
 
 // Analyze temperature trends
 OvenTelemetry
-| where timestamp > ago(24h)
-| summarize avg_temp = avg(temperature), 
-            max_temp = max(temperature),
-            min_temp = min(temperature)
-  by bin(timestamp, 1h)
+| extend TempValue = toreal(Temperature.Value)
+| where Timestamp > ago(24h)
+| summarize avg_temp = avg(TempValue), 
+            max_temp = max(TempValue),
+            min_temp = min(TempValue)
+  by bin(Timestamp, 1h)
 | render timechart
 ```

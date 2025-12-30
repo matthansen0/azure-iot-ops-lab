@@ -213,8 +213,23 @@ write_files:
             echo "FABRIC_DATABASE_ID=${FABRIC_DATABASE_ID:-}" >> /etc/aio.env
             echo "FABRIC_EVENTSTREAM_ID=${FABRIC_EVENTSTREAM_ID:-}" >> /etc/aio.env
             
-            log "Next step: Configure Eventstream custom endpoint in Fabric portal,"
-            log "then run: /usr/local/bin/fabric-dataflow.sh generate-dataflow <endpoint> <name>"
+            log ""
+            log "=============================================="
+            log "FABRIC NEXT STEPS (Manual Portal Configuration)"
+            log "=============================================="
+            log "1. Go to https://app.fabric.microsoft.com"
+            log "2. Open your Eventstream: $FABRIC_EVENTSTREAM_NAME"
+            log "3. Add 'Custom App' source - copy the Event Hub namespace"
+            log "4. Add 'KQL Database' destination - select $FABRIC_DATABASE_NAME"
+            log "5. Activate the Eventstream"
+            log ""
+            log "Then run these commands on this VM:"
+            log "  /usr/local/bin/fabric-eventstream-setup.sh wizard"
+            log "  /usr/local/bin/fabric-dataflow.sh generate-endpoint <namespace> > /tmp/endpoint.yaml"
+            log "  kubectl apply -f /tmp/endpoint.yaml"
+            log "  /usr/local/bin/fabric-dataflow.sh generate-dataflow fabric-eventstream-endpoint destinationeh > /tmp/dataflow.yaml"
+            log "  kubectl apply -f /tmp/dataflow.yaml"
+            log "=============================================="
           fi
         else
           log "Warning: Fabric API script not found. Fabric integration skipped."
