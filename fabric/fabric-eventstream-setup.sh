@@ -130,13 +130,16 @@ create_oven_telemetry_table() {
     
     log_info "Creating OvenTelemetry table in KQL database..."
     
-    # KQL query to create table
+    # KQL table schema matches AIO PassThrough output
+    # OPC Asset fields: Temperature, Weight, EnergyUse (PascalCase with .Value suffix)
+    # Plus metadata fields added by AIO dataflow
     local kql_command=".create-merge table OvenTelemetry (
-    timestamp: datetime,
-    temperature: real,
-    weight: real,
-    energy_use: real,
-    source_topic: string
+    Timestamp: datetime,
+    Temperature: dynamic,
+    Weight: dynamic,
+    EnergyUse: dynamic,
+    AssetId: string,
+    SourceTimestamp: datetime
 ) with (folder = 'AIO')"
 
     # The Fabric API for executing KQL commands
@@ -179,18 +182,30 @@ create_ingestion_mapping() {
     
     log_info "Creating JSON ingestion mapping..."
     
+    # Mapping matches the AIO dataflow PassThrough output format
+    # OPC tags have .Value, .SourceTimestamp nested structure
     local kql_command=".create-or-alter table OvenTelemetry ingestion json mapping 'OvenTelemetryMapping' '[
-    {\"column\":\"timestamp\", \"path\":\"\$.timestamp\", \"datatype\":\"datetime\"},
-    {\"column\":\"temperature\", \"path\":\"\$.temperature\", \"datatype\":\"real\"},
-    {\"column\":\"weight\", \"path\":\"\$.weight\", \"datatype\":\"real\"},
-    {\"column\":\"energy_use\", \"path\":\"\$.energy_use\", \"datatype\":\"real\"},
-    {\"column\":\"source_topic\", \"path\":\"\$.source_topic\", \"datatype\":\"string\"}
+    {\"column\":\"Timestamp\", \"path\":\"\$['\\''Timestamp\\'']\", \"datatype\":\"datetime\"},
+    {\"column\":\"Temperature\", \"path\":\"\$['\\''Temperature\\'']\", \"datatype\":\"dynamic\"},
+    {\"column\":\"Weight\", \"path\":\"\$['\\''Weight\\'']\", \"datatype\":\"dynamic\"},
+    {\"column\":\"EnergyUse\", \"path\":\"\$['\\''EnergyUse\\'']\", \"datatype\":\"dynamic\"},
+    {\"column\":\"AssetId\", \"path\":\"\$.AssetId\", \"datatype\":\"string\"},
+    {\"column\":\"SourceTimestamp\", \"path\":\"\$['\\''Temperature\\''.'\\''SourceTimestamp\\'']\", \"datatype\":\"datetime\"}
 ]'"
 
     echo ""
     echo "Run this KQL command to create the ingestion mapping:"
     echo "─────────────────────────────────────────────────────"
     echo "$kql_command"
+    echo "─────────────────────────────────────────────────────"
+    echo ""
+    echo "Example query to read temperature values:"
+    echo "─────────────────────────────────────────────────────"
+    echo "OvenTelemetry"
+    echo "| extend TempValue = toreal(Temperature.Value)"
+    echo "| project Timestamp, TempValue, AssetId"
+    echo "| order by Timestamp desc"
+    echo "| take 10"
     echo "─────────────────────────────────────────────────────"
     
     return 0
@@ -270,6 +285,45 @@ assign_fabric_permissions() {
         log_warn "You may need to manually add the Arc cluster identity to the workspace"
         return 1
     fi
+}
+
+# Assign Event Hub Data Sender role to Arc cluster identity
+# CRITICAL: This is required for Managed Identity auth to Eventstream/Event Hub
+# Arguments: $1 = cluster_name, $2 = resource_group, $3 = eventhub_namespace_resource_id
+assign_eventhub_sender_role() {
+    local cluster_name="$1"
+    local resource_group="$2"
+    local eventhub_resource_id="$3"
+    
+    log_info "Assigning Event Hub Data Sender role to Arc cluster identity..."
+    
+    # Get the Arc cluster's managed identity principal ID
+    local principal_id
+    principal_id=$(get_arc_cluster_identity "$cluster_name" "$resource_group") || {
+        log_error "Could not get Arc cluster identity"
+        return 1
+    }
+    
+    # Event Hub Data Sender role ID
+    local role_id="2b629674-e913-4c01-ae53-ef4638d8f975"
+    
+    # Assign the role
+    local result
+    result=$(az role assignment create \
+        --assignee "$principal_id" \
+        --role "$role_id" \
+        --scope "$eventhub_resource_id" \
+        -o json 2>&1) || {
+        if echo "$result" | grep -q "already exists"; then
+            log_info "Role assignment already exists"
+            return 0
+        fi
+        log_error "Failed to assign Event Hub Data Sender role: $result"
+        return 1
+    }
+    
+    log_success "Event Hub Data Sender role assigned to Arc cluster identity"
+    return 0
 }
 
 # ============================================================================
