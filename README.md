@@ -69,6 +69,26 @@ chmod +x *.sh
 
 To enable automatic creation of Microsoft Fabric Real-Time Intelligence resources for data visualization:
 
+#### Step 1: Run Pre-Flight Checks (IMPORTANT!)
+
+Before deploying with Fabric, run the pre-flight check to verify you have access and find your capacity ID:
+
+```bash
+# Make scripts executable
+chmod +x fabric/*.sh
+
+# Run pre-flight checks
+./fabric/fabric-preflight.sh
+```
+
+This will:
+- ✅ Verify Azure CLI login
+- ✅ Test Fabric API token acquisition  
+- ✅ List available Fabric capacities (you'll need one!)
+- ✅ Verify workspace creation permissions
+
+#### Step 2: Deploy with Fabric
+
 ```bash
 ./deploy.sh \
   --subscription "<SUB_ID>" \
@@ -81,14 +101,18 @@ To enable automatic creation of Microsoft Fabric Real-Time Intelligence resource
   --schema-registry "aioqs-sr" \
   --schema-namespace "aioqs-ns" \
   --enable-fabric \
-  --fabric-workspace "aio-fabric-workspace"
+  --fabric-workspace "aio-fabric-workspace" \
+  --fabric-capacity-id "<CAPACITY_ID_FROM_PREFLIGHT>"
 ```
 
 This will create:
-- A Fabric workspace
+- A Fabric workspace (on your specified capacity)
 - An Eventhouse for real-time analytics
 - A KQL database for storing oven telemetry
 - An Eventstream for data ingestion
+
+> [!IMPORTANT]
+> The `--fabric-capacity-id` is **required**. Get it from the pre-flight check output above.
 
 > [!NOTE]
 > Fabric integration requires appropriate Fabric capacity and permissions. See [Fabric RTI Integration](#-fabric-rti-integration) for details.

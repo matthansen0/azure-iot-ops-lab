@@ -15,6 +15,7 @@ write_files:
       AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
       ENABLE_FABRIC=@@ENABLE_FABRIC@@
       FABRIC_WORKSPACE_NAME=@@FABRIC_WORKSPACE_NAME@@
+      FABRIC_CAPACITY_ID=@@FABRIC_CAPACITY_ID@@
       FABRIC_EVENTHOUSE_NAME=@@FABRIC_EVENTHOUSE_NAME@@
       FABRIC_DATABASE_NAME=@@FABRIC_DATABASE_NAME@@
       FABRIC_EVENTSTREAM_NAME=@@FABRIC_EVENTSTREAM_NAME@@
@@ -181,8 +182,8 @@ write_files:
           }
           
           if [[ "$ENABLE_FABRIC" == "true" ]]; then
-            log "Creating Fabric workspace: $FABRIC_WORKSPACE_NAME"
-            FABRIC_WORKSPACE_ID=$(create_fabric_workspace "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_NAME") || {
+            log "Creating Fabric workspace: $FABRIC_WORKSPACE_NAME (capacity: $FABRIC_CAPACITY_ID)"
+            FABRIC_WORKSPACE_ID=$(create_fabric_workspace "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_NAME" "$FABRIC_CAPACITY_ID") || {
               log "Warning: Could not create Fabric workspace"
               ENABLE_FABRIC="false"
             }

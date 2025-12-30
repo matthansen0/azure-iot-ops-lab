@@ -28,6 +28,7 @@ AIO_NAMESPACE_NAME="myqsnamespace"
 # Fabric RTI params
 ENABLE_FABRIC="false"
 FABRIC_WORKSPACE_NAME=""
+FABRIC_CAPACITY_ID=""
 FABRIC_EVENTHOUSE_NAME="aio-eventhouse"
 FABRIC_DATABASE_NAME="aio-rti-db"
 FABRIC_EVENTSTREAM_NAME="aio-eventstream"
@@ -56,9 +57,12 @@ Optional:
 Fabric RTI Options:
   --enable-fabric           Enable Fabric RTI integration (default: false)
   --fabric-workspace        Fabric workspace name (required if --enable-fabric)
+  --fabric-capacity-id      Fabric capacity ID (REQUIRED - run fabric/fabric-preflight.sh to find)
   --fabric-eventhouse       Eventhouse name (default: $FABRIC_EVENTHOUSE_NAME)
   --fabric-database         KQL database name (default: $FABRIC_DATABASE_NAME)
   --fabric-eventstream      Eventstream name (default: $FABRIC_EVENTSTREAM_NAME)
+
+IMPORTANT: Run './fabric/fabric-preflight.sh' BEFORE deploying with Fabric to verify access!
 EOF
   exit 1
 }
@@ -81,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --aio-namespace) AIO_NAMESPACE_NAME="$2"; shift 2;;
     --enable-fabric) ENABLE_FABRIC="true"; shift 1;;
     --fabric-workspace) FABRIC_WORKSPACE_NAME="$2"; shift 2;;
+    --fabric-capacity-id) FABRIC_CAPACITY_ID="$2"; shift 2;;
     --fabric-eventhouse) FABRIC_EVENTHOUSE_NAME="$2"; shift 2;;
     --fabric-database) FABRIC_DATABASE_NAME="$2"; shift 2;;
     --fabric-eventstream) FABRIC_EVENTSTREAM_NAME="$2"; shift 2;;
@@ -91,9 +96,18 @@ done
 [[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" ]] && usage
 
 # Validate Fabric params if enabled
-if [[ "$ENABLE_FABRIC" == "true" && -z "$FABRIC_WORKSPACE_NAME" ]]; then
-  echo "Error: --fabric-workspace is required when --enable-fabric is set"
-  usage
+if [[ "$ENABLE_FABRIC" == "true" ]]; then
+  if [[ -z "$FABRIC_WORKSPACE_NAME" ]]; then
+    echo "Error: --fabric-workspace is required when --enable-fabric is set"
+    usage
+  fi
+  if [[ -z "$FABRIC_CAPACITY_ID" ]]; then
+    echo "Error: --fabric-capacity-id is required when --enable-fabric is set"
+    echo ""
+    echo "Run './fabric/fabric-preflight.sh --list-capacities' to find your capacity ID"
+    echo ""
+    exit 1
+  fi
 fi
 
 
@@ -225,6 +239,7 @@ sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
     -e "s|@@AIO_NAMESPACE_NAME@@|$AIO_NAMESPACE_NAME|g" \
     -e "s|@@ENABLE_FABRIC@@|$ENABLE_FABRIC|g" \
     -e "s|@@FABRIC_WORKSPACE_NAME@@|$FABRIC_WORKSPACE_NAME|g" \
+    -e "s|@@FABRIC_CAPACITY_ID@@|$FABRIC_CAPACITY_ID|g" \
     -e "s|@@FABRIC_EVENTHOUSE_NAME@@|$FABRIC_EVENTHOUSE_NAME|g" \
     -e "s|@@FABRIC_DATABASE_NAME@@|$FABRIC_DATABASE_NAME|g" \
     -e "s|@@FABRIC_EVENTSTREAM_NAME@@|$FABRIC_EVENTSTREAM_NAME|g" \
