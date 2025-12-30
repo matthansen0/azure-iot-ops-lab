@@ -47,7 +47,6 @@ az login
 ```bash
 git clone https://github.com/matthansen0/azure-iot-ops-lab.git
 cd azure-iot-ops-lab
-chmod +x *.sh
 ```
 
 *Deploy the VM and copy the install script*
@@ -74,9 +73,6 @@ To enable automatic creation of Microsoft Fabric Real-Time Intelligence resource
 Before deploying with Fabric, run the pre-flight check to verify you have access and find your capacity ID:
 
 ```bash
-# Make scripts executable
-chmod +x fabric/*.sh
-
 # Run pre-flight checks
 ./fabric/fabric-preflight.sh
 ```
