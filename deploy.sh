@@ -25,6 +25,13 @@ SCHEMA_NAMESPACE="aioqs-ns"
 CLUSTER_NAME="aio-k3s"
 AIO_NAMESPACE_NAME="myqsnamespace"
 
+# Fabric RTI params
+ENABLE_FABRIC="false"
+FABRIC_WORKSPACE_NAME=""
+FABRIC_EVENTHOUSE_NAME="aio-eventhouse"
+FABRIC_DATABASE_NAME="aio-rti-db"
+FABRIC_EVENTSTREAM_NAME="aio-eventstream"
+
 usage() {
   cat <<EOF
 Usage: $0 --subscription <SUB_ID> --location <region> [options]
@@ -45,6 +52,13 @@ Optional:
   --schema-registry         Schema Registry name (default: $SCHEMA_REGISTRY)
   --schema-namespace        Schema Registry namespace (default: $SCHEMA_NAMESPACE)
   --aio-namespace           Device Registry namespace (default: $AIO_NAMESPACE_NAME)
+
+Fabric RTI Options:
+  --enable-fabric           Enable Fabric RTI integration (default: false)
+  --fabric-workspace        Fabric workspace name (required if --enable-fabric)
+  --fabric-eventhouse       Eventhouse name (default: $FABRIC_EVENTHOUSE_NAME)
+  --fabric-database         KQL database name (default: $FABRIC_DATABASE_NAME)
+  --fabric-eventstream      Eventstream name (default: $FABRIC_EVENTSTREAM_NAME)
 EOF
   exit 1
 }
@@ -65,11 +79,22 @@ while [[ $# -gt 0 ]]; do
     --schema-namespace) SCHEMA_NAMESPACE="$2"; shift 2;;
     --cluster-name) CLUSTER_NAME="$2"; shift 2;;
     --aio-namespace) AIO_NAMESPACE_NAME="$2"; shift 2;;
+    --enable-fabric) ENABLE_FABRIC="true"; shift 1;;
+    --fabric-workspace) FABRIC_WORKSPACE_NAME="$2"; shift 2;;
+    --fabric-eventhouse) FABRIC_EVENTHOUSE_NAME="$2"; shift 2;;
+    --fabric-database) FABRIC_DATABASE_NAME="$2"; shift 2;;
+    --fabric-eventstream) FABRIC_EVENTSTREAM_NAME="$2"; shift 2;;
     *) echo "Unknown arg: $1"; usage;;
   esac
 done
 
 [[ -z "$SUBSCRIPTION" || -z "$LOCATION" || -z "$STORAGE_ACCOUNT" ]] && usage
+
+# Validate Fabric params if enabled
+if [[ "$ENABLE_FABRIC" == "true" && -z "$FABRIC_WORKSPACE_NAME" ]]; then
+  echo "Error: --fabric-workspace is required when --enable-fabric is set"
+  usage
+fi
 
 
 # Preemptive Azure login check
@@ -198,6 +223,11 @@ sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
     -e "s|@@SCHEMA_REGISTRY@@|$SCHEMA_REGISTRY|g" \
     -e "s|@@SCHEMA_NAMESPACE@@|$SCHEMA_NAMESPACE|g" \
     -e "s|@@AIO_NAMESPACE_NAME@@|$AIO_NAMESPACE_NAME|g" \
+    -e "s|@@ENABLE_FABRIC@@|$ENABLE_FABRIC|g" \
+    -e "s|@@FABRIC_WORKSPACE_NAME@@|$FABRIC_WORKSPACE_NAME|g" \
+    -e "s|@@FABRIC_EVENTHOUSE_NAME@@|$FABRIC_EVENTHOUSE_NAME|g" \
+    -e "s|@@FABRIC_DATABASE_NAME@@|$FABRIC_DATABASE_NAME|g" \
+    -e "s|@@FABRIC_EVENTSTREAM_NAME@@|$FABRIC_EVENTSTREAM_NAME|g" \
     vm/cloud-init-aio.tmpl.yaml > "$TMP_CI"
 
 echo "==> Create VM (Ubuntu 24.04 LTS)"
@@ -216,10 +246,43 @@ az vm create \
 echo "==> Enable managed boot diagnostics on VM (post-create)"
 az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -o none
 
+# Get VM public IP for later use
+VM_PUBLIC_IP=$(az vm list-ip-addresses -g "$COMPUTE_RG" -n "$VM_NAME" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
 
-
-
+# Copy Fabric scripts to VM if Fabric is enabled
+if [[ "$ENABLE_FABRIC" == "true" ]]; then
+  echo "==> Copying Fabric integration scripts to VM"
+  sleep 10  # Wait for VM to be fully ready
+  
+  # Wait for SSH to be available
+  for i in {1..30}; do
+    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" "echo 'SSH ready'" &>/dev/null; then
+      break
+    fi
+    echo "Waiting for SSH to be available... (attempt $i)"
+    sleep 10
+  done
+  
+  # Copy Fabric scripts
+  if [[ -d "fabric" ]]; then
+    scp -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" \
+      fabric/fabric-api.sh \
+      fabric/fabric-dataflow.sh \
+      "${ADMIN_USERNAME}@${VM_PUBLIC_IP}:/tmp/" || echo "Warning: Could not copy Fabric scripts"
+    
+    ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
+      "sudo mv /tmp/fabric-*.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/fabric-*.sh" || \
+      echo "Warning: Could not install Fabric scripts"
+  fi
+fi
 
 echo "==> Done. Now login and run the AIO install script."
-echo "Via SSH: ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>"
+echo "Via SSH: ssh -i ~/.ssh/id_rsa ${ADMIN_USERNAME}@${VM_PUBLIC_IP}"
 echo "or Serial Console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"
+
+if [[ "$ENABLE_FABRIC" == "true" ]]; then
+  echo ""
+  echo "==> Fabric RTI integration is enabled."
+  echo "    After AIO installation, Fabric resources will be created automatically."
+  echo "    You can also manually run: sudo /usr/local/bin/fabric-dataflow.sh deploy"
+fi

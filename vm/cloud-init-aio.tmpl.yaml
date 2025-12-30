@@ -13,6 +13,11 @@ write_files:
       SCHEMA_REGISTRY=@@SCHEMA_REGISTRY@@
       SCHEMA_NAMESPACE=@@SCHEMA_NAMESPACE@@
       AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
+      ENABLE_FABRIC=@@ENABLE_FABRIC@@
+      FABRIC_WORKSPACE_NAME=@@FABRIC_WORKSPACE_NAME@@
+      FABRIC_EVENTHOUSE_NAME=@@FABRIC_EVENTHOUSE_NAME@@
+      FABRIC_DATABASE_NAME=@@FABRIC_DATABASE_NAME@@
+      FABRIC_EVENTSTREAM_NAME=@@FABRIC_EVENTSTREAM_NAME@@
 
   - path: /usr/local/bin/aio-install.sh
     permissions: '0755'
@@ -159,6 +164,61 @@ write_files:
                      aioExtensionName="$EXT_NAME" \
                      aioInstanceName="$INST_NAME" \
                      aioNamespaceName="$AIO_NAMESPACE_NAME"
+
+      # Fabric RTI Integration (if enabled)
+      if [[ "${ENABLE_FABRIC:-false}" == "true" ]]; then
+        log "Fabric RTI Integration"
+        
+        # Download and source the Fabric API script
+        if [[ -f /usr/local/bin/fabric-api.sh ]]; then
+          source /usr/local/bin/fabric-api.sh
+          
+          log "Getting Fabric API token..."
+          FABRIC_TOKEN=$(get_fabric_token) || {
+            log "Warning: Could not get Fabric token. Fabric integration will be skipped."
+            log "You can run fabric integration manually later with: /usr/local/bin/fabric-dataflow.sh deploy"
+            ENABLE_FABRIC="false"
+          }
+          
+          if [[ "$ENABLE_FABRIC" == "true" ]]; then
+            log "Creating Fabric workspace: $FABRIC_WORKSPACE_NAME"
+            FABRIC_WORKSPACE_ID=$(create_fabric_workspace "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_NAME") || {
+              log "Warning: Could not create Fabric workspace"
+              ENABLE_FABRIC="false"
+            }
+          fi
+          
+          if [[ "$ENABLE_FABRIC" == "true" && -n "${FABRIC_WORKSPACE_ID:-}" ]]; then
+            log "Creating Eventhouse: $FABRIC_EVENTHOUSE_NAME"
+            FABRIC_EVENTHOUSE_ID=$(create_eventhouse "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_ID" "$FABRIC_EVENTHOUSE_NAME") || true
+            
+            if [[ -n "${FABRIC_EVENTHOUSE_ID:-}" ]]; then
+              log "Creating KQL Database: $FABRIC_DATABASE_NAME"
+              FABRIC_DATABASE_ID=$(create_kql_database "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_ID" "$FABRIC_DATABASE_NAME" "$FABRIC_EVENTHOUSE_ID") || true
+            fi
+            
+            log "Creating Eventstream: $FABRIC_EVENTSTREAM_NAME"
+            FABRIC_EVENTSTREAM_ID=$(create_eventstream "$FABRIC_TOKEN" "$FABRIC_WORKSPACE_ID" "$FABRIC_EVENTSTREAM_NAME") || true
+            
+            log "Fabric RTI resources created:"
+            log "  Workspace ID:   ${FABRIC_WORKSPACE_ID:-'not created'}"
+            log "  Eventhouse ID:  ${FABRIC_EVENTHOUSE_ID:-'not created'}"
+            log "  Database ID:    ${FABRIC_DATABASE_ID:-'not created'}"
+            log "  Eventstream ID: ${FABRIC_EVENTSTREAM_ID:-'not created'}"
+            
+            # Save IDs to env file for later use
+            echo "FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}" >> /etc/aio.env
+            echo "FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}" >> /etc/aio.env
+            echo "FABRIC_DATABASE_ID=${FABRIC_DATABASE_ID:-}" >> /etc/aio.env
+            echo "FABRIC_EVENTSTREAM_ID=${FABRIC_EVENTSTREAM_ID:-}" >> /etc/aio.env
+            
+            log "Next step: Configure Eventstream custom endpoint in Fabric portal,"
+            log "then run: /usr/local/bin/fabric-dataflow.sh generate-dataflow <endpoint> <name>"
+          fi
+        else
+          log "Warning: Fabric API script not found. Fabric integration skipped."
+        fi
+      fi
 
       log "All done."
 runcmd:
