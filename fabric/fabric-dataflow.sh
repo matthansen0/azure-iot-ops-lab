@@ -44,8 +44,8 @@ spec:
               - 'Temperature'
             output: temperature
           - inputs:
-              - 'FillWeight'
-            output: fill_weight
+              - 'Weight'
+            output: weight
           - inputs:
               - 'EnergyUse'
             output: energy_use

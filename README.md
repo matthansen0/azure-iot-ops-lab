@@ -182,59 +182,123 @@ Please ensure your pull request adheres to the existing style and includes relev
 
 ## 📊 Fabric RTI Integration
 
-This lab now supports automatic integration with Microsoft Fabric Real-Time Intelligence (RTI) for data visualization and analytics.
+This lab supports integration with Microsoft Fabric Real-Time Intelligence (RTI) for data visualization and analytics.
 
-### What gets created
+### What's Automated vs Manual
 
-When you enable Fabric integration (`--enable-fabric`), the following resources are automatically provisioned:
+| Step | Automated? | Notes |
+|------|------------|-------|
+| Pre-flight checks | ✅ Yes | `./fabric/fabric-preflight.sh` |
+| Fabric Workspace creation | ✅ Yes | Via Fabric REST API |
+| Eventhouse creation | ✅ Yes | Via Fabric REST API |
+| KQL Database creation | ✅ Yes | Via Fabric REST API |
+| Eventstream creation | ✅ Yes | Via Fabric REST API |
+| Eventstream Custom App source | ⚠️ **Manual** | Fabric portal required |
+| Eventstream → KQL destination | ⚠️ **Manual** | Fabric portal required |
+| KQL table schema | ⚠️ **Script provided** | Run KQL command |
+| AIO Dataflow configuration | ✅ Yes | After getting connection string |
 
-| Resource | Description |
-|----------|-------------|
-| **Fabric Workspace** | Container for all Fabric items |
-| **Eventhouse** | Real-time analytics engine (similar to Azure Data Explorer) |
-| **KQL Database** | Time-series database for storing oven telemetry |
-| **Eventstream** | Data ingestion pipeline from AIO to Fabric |
+> [!WARNING]
+> **The Fabric REST API has limitations.** Eventstream source/destination configuration currently requires the Fabric portal. We automate everything possible and provide scripts for the rest.
 
 ### Prerequisites for Fabric
 
-1. **Fabric Capacity**: You need access to a Fabric capacity (F2 or higher, or trial capacity)
+1. **Fabric Capacity**: You need access to a Fabric capacity (F2 or higher, or trial)
 2. **Permissions**: Your Azure AD account must have permission to create Fabric workspaces
 3. **Fabric Enabled**: Fabric must be enabled for your tenant
+
+Run the pre-flight check to verify all prerequisites:
+```bash
+./fabric/fabric-preflight.sh
+```
 
 ### Data Flow Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   OPC PLC       │────▶│   AIO Broker    │────▶│   Dataflow      │
+│   OPC PLC       │────▶│   AIO Broker    │────▶│   AIO Dataflow  │
 │   Simulator     │     │   (MQTT)        │     │   (Transform)   │
-│   (Oven)        │     │                 │     │                 │
+│   (thermostat)  │     │                 │     │                 │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                    Event Hub
+                                                    Protocol
                                                          │
                                                          ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   KQL Database  │◀────│   Eventhouse    │◀────│   Eventstream   │
-│   (Query/View)  │     │   (Storage)     │     │   (Ingest)      │
+│   (Query/View)  │     │   (Storage)     │     │   (Custom App)  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                                              ▲
+         │              MANUAL SETUP REQUIRED           │
+         └──────────────────────────────────────────────┘
 ```
 
-### Manual Fabric Setup (Alternative)
+### Complete Setup Process
 
-If you prefer to set up Fabric manually or the automatic setup fails:
+#### Phase 1: Pre-Flight (Before AIO Deploy)
 
 ```bash
-# SSH into the VM
+# 1. Verify Fabric access and get capacity ID
+./fabric/fabric-preflight.sh
+
+# 2. Note your capacity ID from the output
+```
+
+#### Phase 2: Deploy AIO with Fabric Resources
+
+```bash
+./deploy.sh \
+  --subscription "<SUB_ID>" \
+  --location "eastus2" \
+  --storage-account "aio$(date +%s)" \
+  --enable-fabric \
+  --fabric-workspace "aio-fabric-workspace" \
+  --fabric-capacity-id "<YOUR_CAPACITY_ID>"
+```
+
+This creates the Fabric workspace, Eventhouse, KQL Database, and Eventstream.
+
+#### Phase 3: Manual Fabric Portal Configuration
+
+After deployment, complete these steps in the [Fabric portal](https://app.fabric.microsoft.com):
+
+1. **Open your Eventstream**
+2. **Add Custom App source:**
+   - Click "New source" → "Custom App"
+   - Name it `aio-input`
+   - Copy the **Event Hub connection string**
+3. **Add KQL Database destination:**
+   - Click "New destination" → "KQL Database"
+   - Select your Eventhouse and database
+   - Configure data mapping (or use "Direct ingestion")
+4. **Activate the Eventstream**
+
+#### Phase 4: Configure AIO Dataflow
+
+On the AIO VM, configure the dataflow with your connection string:
+
+```bash
+# SSH into VM
 ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 
-# Test Fabric API connectivity
-sudo /usr/local/bin/fabric-api.sh test
+# Run the setup wizard (provides KQL table schema and instructions)
+sudo /usr/local/bin/fabric-eventstream-setup.sh wizard
 
-# Run full Fabric deployment
-sudo /usr/local/bin/fabric-dataflow.sh deploy
+# Generate AIO dataflow config with your Eventstream endpoint
+# Replace with your actual Event Hub namespace from Fabric
+sudo /usr/local/bin/fabric-dataflow.sh generate-endpoint \
+  "your-eventstream-namespace.servicebus.windows.net"
+
+# Generate and apply the dataflow
+sudo /usr/local/bin/fabric-dataflow.sh generate-dataflow \
+  "your-eventstream-namespace.servicebus.windows.net" \
+  "aio-eventstream" > /tmp/dataflow.yaml
+
+kubectl apply -f /tmp/dataflow.yaml
 ```
 
 ### Validating the Integration
-
-Run the test suite to validate your Fabric API integration:
 
 ```bash
 # Quick connectivity test (no resources created)
@@ -242,17 +306,20 @@ Run the test suite to validate your Fabric API integration:
 
 # Full integration test (creates and deletes test resources)
 ./fabric/test-fabric-integration.sh all
+
+# Check Eventstream is receiving data (in Fabric portal)
+# Query KQL database:
 ```
 
 ### Querying Oven Data in Fabric
 
-Once data is flowing, you can query it in the KQL database:
+Once data is flowing, query it in a KQL Queryset:
 
 ```kql
-// Get recent oven telemetry
+// Get recent telemetry
 OvenTelemetry
 | where timestamp > ago(1h)
-| project timestamp, temperature, fill_weight, energy_use
+| project timestamp, temperature, weight, energy_use
 | order by timestamp desc
 | take 100
 
