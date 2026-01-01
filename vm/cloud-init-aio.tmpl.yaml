@@ -170,9 +170,17 @@ write_files:
       if [[ "${ENABLE_FABRIC:-false}" == "true" ]]; then
         log "Fabric RTI Integration"
         
-        # Download and source the Fabric API script
-        if [[ -f /usr/local/bin/fabric-api.sh ]]; then
-          source /usr/local/bin/fabric-api.sh
+        # Find and source the Fabric API script (check multiple locations)
+        FABRIC_SCRIPT=""
+        for loc in /usr/local/bin/fabric-api.sh /home/azureuser/fabric/fabric-api.sh; do
+          if [[ -f "$loc" ]]; then
+            FABRIC_SCRIPT="$loc"
+            break
+          fi
+        done
+        
+        if [[ -n "$FABRIC_SCRIPT" ]]; then
+          source "$FABRIC_SCRIPT"
           
           log "Getting Fabric API token..."
           FABRIC_TOKEN=$(get_fabric_token) || {
@@ -232,7 +240,8 @@ write_files:
             log "=============================================="
           fi
         else
-          log "Warning: Fabric API script not found. Fabric integration skipped."
+          log "Warning: Fabric API script not found at /usr/local/bin/ or ~/fabric/"
+          log "Copy the scripts manually or re-run deploy.sh with --enable-fabric"
         fi
       fi
 

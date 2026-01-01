@@ -136,6 +136,19 @@ echo "==> Create resource groups"
 az group create -n "$COMPUTE_RG" -l "$LOCATION" -o none
 az group create -n "$OPS_RG" -l "$LOCATION" -o none
 
+# Wait for resource groups to fully propagate (prevents race conditions)
+echo "Waiting for resource groups to fully propagate..."
+for i in {1..12}; do
+  COMPUTE_STATE=$(az group show -n "$COMPUTE_RG" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "None")
+  OPS_STATE=$(az group show -n "$OPS_RG" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "None")
+  if [[ "$COMPUTE_STATE" == "Succeeded" && "$OPS_STATE" == "Succeeded" ]]; then
+    echo "Resource groups ready."
+    break
+  fi
+  echo "  RG states: Compute=$COMPUTE_STATE, Ops=$OPS_STATE (attempt $i/12)"
+  sleep 5
+done
+
 echo "==> Create VNet, subnet, NSG"
 
 
@@ -246,7 +259,8 @@ sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
     vm/cloud-init-aio.tmpl.yaml > "$TMP_CI"
 
 echo "==> Create VM (Ubuntu 24.04 LTS)"
-az vm create \
+# VM creation can return transient ARM errors even when successful - handle gracefully
+VM_CREATE_OUTPUT=$(az vm create \
   -g "$COMPUTE_RG" -n "$VM_NAME" \
   --location "$LOCATION" \
   --nics "$NIC_NAME" \
@@ -256,7 +270,23 @@ az vm create \
   --ssh-key-values "$SSH_PUBLIC_KEY" \
   --custom-data "$TMP_CI" \
   --public-ip-sku Standard \
-  -o jsonc | jq '{name: .name, publicIp: .publicIpAddress, fqdns: .fqdns}'
+  -o json 2>&1) || true
+
+# Verify VM was actually created (ARM can return error even on success)
+echo "Verifying VM creation..."
+for i in {1..10}; do
+  VM_STATE=$(az vm show -g "$COMPUTE_RG" -n "$VM_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "NotFound")
+  if [[ "$VM_STATE" == "Succeeded" ]]; then
+    echo "VM created successfully."
+    break
+  elif [[ "$VM_STATE" == "NotFound" && $i -eq 10 ]]; then
+    echo "ERROR: VM was not created after 10 checks. Original output:"
+    echo "$VM_CREATE_OUTPUT"
+    exit 1
+  fi
+  echo "  VM state: $VM_STATE (check $i/10)"
+  sleep 10
+done
 
 echo "==> Enable managed boot diagnostics on VM (post-create)"
 az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -o none
@@ -267,28 +297,52 @@ VM_PUBLIC_IP=$(az vm list-ip-addresses -g "$COMPUTE_RG" -n "$VM_NAME" --query "[
 # Copy Fabric scripts to VM if Fabric is enabled
 if [[ "$ENABLE_FABRIC" == "true" ]]; then
   echo "==> Copying Fabric integration scripts to VM"
-  sleep 10  # Wait for VM to be fully ready
   
-  # Wait for SSH to be available
+  # Wait for SSH to be available (with longer initial delay for cloud-init)
+  echo "Waiting for VM and SSH to be ready..."
+  sleep 30
+  
   for i in {1..30}; do
     if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" "echo 'SSH ready'" &>/dev/null; then
+      echo "SSH is available."
       break
     fi
-    echo "Waiting for SSH to be available... (attempt $i)"
+    echo "Waiting for SSH to be available... (attempt $i/30)"
     sleep 10
   done
   
-  # Copy Fabric scripts
+  # Copy Fabric scripts to both /usr/local/bin and ~/fabric for redundancy
   if [[ -d "fabric" ]]; then
+    echo "Copying Fabric scripts..."
+    
+    # Create backup location in user home
+    ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
+      "mkdir -p ~/fabric" || true
+    
+    # Copy to /tmp first, then move to final locations
     scp -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" \
       fabric/fabric-api.sh \
       fabric/fabric-dataflow.sh \
       fabric/fabric-eventstream-setup.sh \
-      "${ADMIN_USERNAME}@${VM_PUBLIC_IP}:/tmp/" || echo "Warning: Could not copy Fabric scripts"
+      "${ADMIN_USERNAME}@${VM_PUBLIC_IP}:/tmp/" || {
+        echo "Warning: Could not copy Fabric scripts to /tmp"
+      }
     
+    # Install to /usr/local/bin (primary location)
     ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
-      "sudo mv /tmp/fabric-*.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/fabric-*.sh" || \
-      echo "Warning: Could not install Fabric scripts"
+      "sudo cp /tmp/fabric-*.sh /usr/local/bin/ 2>/dev/null && sudo chmod +x /usr/local/bin/fabric-*.sh 2>/dev/null && echo 'Installed to /usr/local/bin'" || \
+      echo "Warning: Could not install Fabric scripts to /usr/local/bin"
+    
+    # Also copy to ~/fabric as backup (aio-install.sh checks both locations)
+    ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
+      "cp /tmp/fabric-*.sh ~/fabric/ 2>/dev/null && chmod +x ~/fabric/*.sh 2>/dev/null && echo 'Installed to ~/fabric'" || \
+      echo "Warning: Could not copy Fabric scripts to ~/fabric"
+    
+    # Verify installation
+    ssh -o StrictHostKeyChecking=no -i "${SSH_PUBLIC_KEY%.*}" "${ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
+      "ls -la /usr/local/bin/fabric-*.sh 2>/dev/null || ls -la ~/fabric/*.sh 2>/dev/null || echo 'ERROR: No Fabric scripts found!'"
+  else
+    echo "Warning: fabric/ directory not found. Fabric scripts not copied."
   fi
 fi
 
