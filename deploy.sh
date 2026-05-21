@@ -89,7 +89,7 @@ echo "==> Setting subscription"
 az account set --subscription "$SUBSCRIPTION"
 
 echo "==> Global provider registration"
-for rp in Microsoft.ExtendedLocation Microsoft.Kubernetes Microsoft.KubernetesConfiguration Microsoft.IoTOperations Microsoft.DeviceRegistry Microsoft.Storage Microsoft.Network; do
+for rp in Microsoft.ExtendedLocation Microsoft.Kubernetes Microsoft.KubernetesConfiguration Microsoft.IoTOperations Microsoft.DeviceRegistry Microsoft.SecretSyncController Microsoft.Storage Microsoft.Network; do
   az provider register -n "$rp" -o none || true
 done
 
@@ -188,6 +188,15 @@ for i in {1..10}; do
   sleep 5
 done
 
+echo "==> Resolve custom locations service principal OID"
+CUSTOM_LOCATIONS_OID=$(az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv)
+if [[ -z "$CUSTOM_LOCATIONS_OID" ]]; then
+  echo "Failed to resolve custom locations service principal object ID."
+  echo "Ensure your signed-in identity can read service principals in Microsoft Entra ID."
+  exit 1
+fi
+echo "   Custom locations OID: $CUSTOM_LOCATIONS_OID"
+
 echo "==> Prepare cloud-init from template"
 TMP_CI="$(mktemp)"
 sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
@@ -198,9 +207,10 @@ sed -e "s|@@SUBSCRIPTION@@|$SUBSCRIPTION|g" \
     -e "s|@@SCHEMA_REGISTRY@@|$SCHEMA_REGISTRY|g" \
     -e "s|@@SCHEMA_NAMESPACE@@|$SCHEMA_NAMESPACE|g" \
     -e "s|@@AIO_NAMESPACE_NAME@@|$AIO_NAMESPACE_NAME|g" \
+    -e "s|@@CUSTOM_LOCATIONS_OID@@|$CUSTOM_LOCATIONS_OID|g" \
     vm/cloud-init-aio.tmpl.yaml > "$TMP_CI"
 
-echo "==> Create VM (Ubuntu 24.04 LTS)"
+echo "==> Create VM (Ubuntu 24.04 LTS) with system-assigned managed identity"
 az vm create \
   -g "$COMPUTE_RG" -n "$VM_NAME" \
   --location "$LOCATION" \
@@ -211,15 +221,32 @@ az vm create \
   --ssh-key-values "$SSH_PUBLIC_KEY" \
   --custom-data "$TMP_CI" \
   --public-ip-sku Standard \
+  --assign-identity \
   -o jsonc | jq '{name: .name, publicIp: .publicIpAddress, fqdns: .fqdns}'
 
 echo "==> Enable managed boot diagnostics on VM (post-create)"
 az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -o none
 
+echo "==> Assign VM managed identity Owner role on ops resource group"
+VM_PRINCIPAL_ID=$(az vm show -g "$COMPUTE_RG" -n "$VM_NAME" --query identity.principalId -o tsv)
+OPS_RG_SCOPE="/subscriptions/$SUBSCRIPTION/resourceGroups/$OPS_RG"
+if ! az role assignment list \
+  --assignee-object-id "$VM_PRINCIPAL_ID" \
+  --scope "$OPS_RG_SCOPE" \
+  --query "[?roleDefinitionName=='Owner'] | [0].id" -o tsv | grep -q .; then
+  az role assignment create \
+    --assignee-object-id "$VM_PRINCIPAL_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "Owner" \
+    --scope "$OPS_RG_SCOPE" -o none
+  echo "   Assigned Owner to VM identity ($VM_PRINCIPAL_ID) on $OPS_RG"
+else
+  echo "   Owner role already assigned to VM identity ($VM_PRINCIPAL_ID) on $OPS_RG"
+fi
 
-
-
-
-echo "==> Done. Now login and run the AIO install script."
-echo "Via SSH: ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>"
-echo "or Serial Console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"
+VM_PUBLIC_IP=$(az vm list-ip-addresses -g "$COMPUTE_RG" -n "$VM_NAME" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+echo ""
+echo "==> Done. AIO install is running automatically via cloud-init."
+echo "   Monitor progress:  ssh -i ~/.ssh/id_rsa ${ADMIN_USERNAME}@${VM_PUBLIC_IP} 'sudo tail -f /var/log/aio-install.log'"
+echo "   Or serial console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"
+echo "   Full install takes ~30-45 minutes."

@@ -13,6 +13,7 @@ write_files:
       SCHEMA_REGISTRY=@@SCHEMA_REGISTRY@@
       SCHEMA_NAMESPACE=@@SCHEMA_NAMESPACE@@
       AIO_NAMESPACE_NAME=@@AIO_NAMESPACE_NAME@@
+      CUSTOM_LOCATIONS_OID=@@CUSTOM_LOCATIONS_OID@@
 
   - path: /usr/local/bin/aio-install.sh
     permissions: '0755'
@@ -45,9 +46,38 @@ write_files:
       fi
       az config set extension.use_dynamic_install=yes_without_prompt
 
-      log "Login with your Azure user account (device code)"
-      az login --use-device-code
+      log "Login with VM managed identity"
+      MI_LOGIN_OK=false
+      for i in $(seq 1 30); do
+        if az login --identity 2>/dev/null; then
+          echo "Managed identity login succeeded."
+          MI_LOGIN_OK=true
+          break
+        fi
+        echo "Waiting for managed identity to be ready (attempt $i/30)..."
+        sleep 10
+      done
+      if [[ "$MI_LOGIN_OK" != "true" ]]; then
+        echo "Managed identity login did not succeed after 30 attempts."
+        exit 1
+      fi
       az account set --subscription "$SUBSCRIPTION"
+
+      # Role assignment is created right after VM provisioning; wait for propagation.
+      log "Wait for RBAC propagation on ops resource group"
+      RBAC_READY=false
+      for i in $(seq 1 30); do
+        if az group show -n "$OPS_RG" >/dev/null 2>&1; then
+          RBAC_READY=true
+          break
+        fi
+        echo "RBAC not ready yet for managed identity (attempt $i/30)."
+        sleep 10
+      done
+      if [[ "$RBAC_READY" != "true" ]]; then
+        echo "Managed identity still cannot access resource group $OPS_RG after waiting."
+        exit 1
+      fi
 
       # Providers (idempotent)
       for rp in Microsoft.ExtendedLocation Microsoft.Kubernetes Microsoft.KubernetesConfiguration Microsoft.IoTOperations Microsoft.DeviceRegistry Microsoft.SecretSyncController; do
@@ -79,7 +109,7 @@ write_files:
       az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" --resource-group "$OPS_RG"
 
       log "Enable features (retry up to 15 minutes, refresh token every 5 attempts)"
-      OBJECT_ID=$(az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv)
+      OBJECT_ID="$CUSTOM_LOCATIONS_OID"
       MAX_ATTEMPTS=30  # 15 minutes at 30s per attempt
       for i in $(seq 1 $MAX_ATTEMPTS); do
         set +e
@@ -127,9 +157,65 @@ write_files:
       fi
       NS_ID=$(az iot ops ns show --name "$AIO_NAMESPACE_NAME" -g "$OPS_RG" --query id -o tsv)
 
+      # Deploy OpenTelemetry Collector for AIO observability
+      log "Deploy OpenTelemetry Collector"
+      kubectl get namespace azure-iot-operations || kubectl create namespace azure-iot-operations
+      helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+      helm repo update
+      cat <<'OTELEOF' > /tmp/otel-collector-values.yaml
+      mode: deployment
+      fullnameOverride: aio-otel-collector
+      image:
+        repository: otel/opentelemetry-collector
+        tag: 0.143.0
+      config:
+        processors:
+          memory_limiter:
+            limit_percentage: 80
+            spike_limit_percentage: 10
+            check_interval: 60s
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: ":4317"
+              http:
+                endpoint: ":4318"
+        exporters:
+          prometheus:
+            endpoint: ":8889"
+            resource_to_telemetry_conversion:
+              enabled: true
+            add_metric_suffixes: false
+        service:
+          extensions:
+            - health_check
+          telemetry:
+            metrics:
+              level: none
+          pipelines:
+            metrics:
+              receivers:
+                - otlp
+              exporters:
+                - prometheus
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "512Mi"
+      ports:
+        metrics:
+          enabled: true
+          containerPort: 8889
+          servicePort: 8889
+          protocol: TCP
+      OTELEOF
+      helm upgrade --install aio-observability open-telemetry/opentelemetry-collector \
+        -f /tmp/otel-collector-values.yaml --namespace azure-iot-operations
+
       # Initialize AIO (let it own the foundation)
       log "AIO init"
-      az iot ops init --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG"
+      az iot ops init --cluster "$CLUSTER_NAME" --resource-group "$OPS_RG" --check-cluster
 
       # Create AIO instance
       log "AIO create"
@@ -139,7 +225,9 @@ write_files:
           --sr-resource-id "$SR_ID" --ns-resource-id "$NS_ID" \
           --broker-frontend-replicas 1 --broker-frontend-workers 1 \
           --broker-backend-part 1 --broker-backend-workers 1 --broker-backend-rf 2 \
-          --broker-mem-profile Low
+          --broker-mem-profile Low \
+          --ops-config observability.metrics.openTelemetryCollectorAddress=aio-otel-collector.azure-iot-operations.svc.cluster.local:4317 \
+          --ops-config observability.metrics.exportInternalSeconds=60
       fi
 
       # Simulator + quickstart Bicep

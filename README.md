@@ -38,8 +38,8 @@ az login
 
 ## 🔒 Lab Security notes
 
-- This lab uses your own Azure user credentials for all operations.
-- SSH access to the VM is opened via a Network Security Group (NSG) rule.
+- The VM uses a **system-assigned managed identity** with Owner role on the ops resource group. This enables fully automated (non-interactive) AIO installation via cloud-init.
+- SSH access to the VM is opened via a Network Security Group (NSG) rule restricted to your current IP.
 - A local SSH key pair is generated on your local machine for authentication.
 
 ## 🧪 Quick start
@@ -50,7 +50,7 @@ cd azure-iot-ops-lab
 chmod +x *.sh
 ```
 
-*Deploy the VM and copy the install script*
+*Deploy — the install runs automatically after VM creation:*
 
 ```bash
 ./deploy.sh \
@@ -65,31 +65,29 @@ chmod +x *.sh
   --schema-namespace "aioqs-ns"
 ```
 
-### SSH into the VM and run the install script
+The script creates the VM with a managed identity, assigns it roles, and cloud-init automatically begins the AIO installation. No manual SSH or device-code login is needed.
+
+### Monitor progress
 
 ```bash
-ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
+# Follow the install log (takes ~30-45 minutes)
+ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP> 'sudo tail -f /var/log/aio-install.log'
 ```
-
-```bash
-sudo bash /usr/local/bin/aio-install.sh
-```
-
-The script will prompt you to authenticate with Azure using a device code, and will take between 30-45 minutes to complete.
-
-![Install Script](media/install-script.png)
 
 ### Verify (optional)
 
 ```bash
 # On the VM (or via Arc)
+ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
+sudo -i
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 kubectl get nodes
 kubectl get pods -n azure-iot-operations
-kubectl get pods -n azure-arc-containerstorage
 kubectl get pods -n cert-manager
 
-# In Azure
+# From any machine with Azure CLI
 az iot ops list -g rg-aioOps -o table
+az iot ops check
 ```
 
 > View install logs on the VM:
@@ -97,6 +95,19 @@ az iot ops list -g rg-aioOps -o table
 > ```bash
 > tail -40 /var/log/aio-install.log
 > ```
+
+---
+
+## 📖 Lab Guides
+
+Once the deployment is complete, work through the hands-on labs:
+
+| Lab | Topic |
+|-----|-------|
+| [Lab 1: Explore](labs/01-explore.md) | Tour K8s resources, AIO custom resources, the Azure portal, and health checks |
+| [Lab 2: Observability](labs/02-observability.md) | Verify the OTel collector, view Prometheus metrics, optionally add Azure Monitor + Grafana |
+| [Lab 3: Data Flows](labs/03-dataflow.md) | Create a data flow endpoint and route OPC PLC data to Event Hubs |
+| [Lab 4: Cleanup](labs/04-cleanup.md) | Tear down all resources |
 
 > [!TIP]
 > You will be able to see finalized progress of the deployment once there is device messages being sent into the IoT Hub.
@@ -123,5 +134,3 @@ Please ensure your pull request adheres to the existing style and includes relev
 
 - [ ] Add "next steps" automation for data ingestion and visualization
 - [ ] Add support for password Azure-managed SSH key resources for VM login
-- [ ] Add cost estimation or resource summary
-- [x] Create architecture diagram
