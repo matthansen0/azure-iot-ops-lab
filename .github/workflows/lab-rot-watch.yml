@@ -1,0 +1,333 @@
+name: Lab Rot Watch
+
+on:
+  schedule:
+    - cron: '0 15 * * 1' # Mondays 15:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: lab-rot-watch
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run static lab-rot checks
+        id: checks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FINDINGS_FILE="findings.txt"
+          : > "$FINDINGS_FILE"
+
+          add_finding() {
+            echo "$1" >> "$FINDINGS_FILE"
+          }
+
+          # ----------------------------------------------------------------------
+          # 1) Script syntax sanity (cheap learner-blocking drift signal)
+          # ----------------------------------------------------------------------
+          if ! bash -n deploy.sh; then
+            add_finding "deploy.sh has a bash syntax error (bash -n failed)."
+          fi
+          if ! bash -n destroy.sh; then
+            add_finding "destroy.sh has a bash syntax error (bash -n failed)."
+          fi
+
+          # ----------------------------------------------------------------------
+          # 2) README command parity with script flags
+          # ----------------------------------------------------------------------
+          deploy_block=$(awk '
+            BEGIN {in_code=0; in_deploy=0}
+            /^```bash/ {in_code=1; next}
+            in_code && /^```/ {in_code=0; in_deploy=0; next}
+            in_code && /\.\/deploy\.sh/ {in_deploy=1}
+            in_code && in_deploy {print}
+          ' README.md)
+
+          destroy_block=$(awk '
+            BEGIN {in_code=0; in_destroy=0}
+            /^```bash/ {in_code=1; next}
+            in_code && /^```/ {in_code=0; in_destroy=0; next}
+            in_code && /\.\/destroy\.sh/ {in_destroy=1}
+            in_code && in_destroy {print}
+          ' README.md)
+
+          mapfile -t deploy_doc_flags < <(printf '%s\n' "$deploy_block" | grep -oE -- '--[a-z0-9-]+' | sort -u || true)
+          mapfile -t destroy_doc_flags < <(printf '%s\n' "$destroy_block" | grep -oE -- '--[a-z0-9-]+' | sort -u || true)
+          mapfile -t deploy_script_flags < <(grep -oE -- '--[a-z0-9-]+' deploy.sh | sort -u || true)
+          mapfile -t destroy_script_flags < <(grep -oE -- '--[a-z0-9-]+' destroy.sh | sort -u || true)
+
+          for flag in "${deploy_doc_flags[@]:-}"; do
+            if [[ -n "$flag" ]] && ! printf '%s\n' "${deploy_script_flags[@]:-}" | grep -qx -- "$flag"; then
+              add_finding "README deploy example uses $flag but deploy.sh does not define it."
+            fi
+          done
+
+          for flag in "${destroy_doc_flags[@]:-}"; do
+            if [[ -n "$flag" ]] && ! printf '%s\n' "${destroy_script_flags[@]:-}" | grep -qx -- "$flag"; then
+              add_finding "README destroy example uses $flag but destroy.sh does not define it."
+            fi
+          done
+
+          for required in --subscription --location --storage-account; do
+            if ! printf '%s\n' "${deploy_doc_flags[@]:-}" | grep -qx -- "$required"; then
+              add_finding "README deploy example is missing required flag $required from deploy.sh usage."
+            fi
+          done
+
+          # ----------------------------------------------------------------------
+          # 3) Template placeholder parity (deploy.sh sed replacements vs cloud-init)
+          # ----------------------------------------------------------------------
+          mapfile -t template_vars < <(grep -oE '@@[A-Z0-9_]+@@' vm/cloud-init-aio.tmpl.yaml | sort -u || true)
+          mapfile -t deploy_vars < <(grep -oE '@@[A-Z0-9_]+@@' deploy.sh | sort -u || true)
+
+          for v in "${template_vars[@]:-}"; do
+            if [[ -n "$v" ]] && ! printf '%s\n' "${deploy_vars[@]:-}" | grep -qx -- "$v"; then
+              add_finding "cloud-init template variable $v has no replacement in deploy.sh sed block."
+            fi
+          done
+          for v in "${deploy_vars[@]:-}"; do
+            if [[ -n "$v" ]] && ! printf '%s\n' "${template_vars[@]:-}" | grep -qx -- "$v"; then
+              add_finding "deploy.sh replaces $v but vm/cloud-init-aio.tmpl.yaml does not contain it."
+            fi
+          done
+
+          # ----------------------------------------------------------------------
+          # 4) External link rot in learner-facing docs/scripts
+          # ----------------------------------------------------------------------
+          mapfile -t urls < <(grep -RhoE 'https://[^"() <>]+' README.md vm/cloud-init-aio.tmpl.yaml | sed 's/[.,;:]$//' | sort -u || true)
+
+          for url in "${urls[@]:-}"; do
+            [[ -z "$url" ]] && continue
+
+            code=$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 20 --head "$url" || echo 000)
+            if [[ "$code" == "405" || "$code" == "000" ]]; then
+              code=$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)
+            fi
+
+            case "$code" in
+              2*|3*|401|403) ;;
+              *) add_finding "Link check failed for $url (HTTP $code)." ;;
+            esac
+          done
+
+          # ----------------------------------------------------------------------
+          # 4b) Upstream mutability risk (unversioned GitHub refs)
+          # ----------------------------------------------------------------------
+          mapfile -t mutable_refs < <(
+            grep -RhoE 'https://raw\.githubusercontent\.com/[^"() <>]+' deploy.sh vm/cloud-init-aio.tmpl.yaml README.md \
+              | grep -E '/(main|master)/' \
+              | sed 's/[.,;:]$//' \
+              | sort -u || true
+          )
+
+          for url in "${mutable_refs[@]:-}"; do
+            [[ -z "$url" ]] && continue
+            add_finding "Upstream artifact uses mutable branch ref (main/master): $url (consider pinning to a commit SHA)."
+          done
+
+          # Require SHA-pinned refs for raw.githubusercontent.com artifact pulls.
+          mapfile -t raw_github_urls < <(
+            grep -RhoE 'https://raw\.githubusercontent\.com/[^"() <>]+' deploy.sh vm/cloud-init-aio.tmpl.yaml README.md \
+              | sed 's/[.,;:]$//' \
+              | sort -u || true
+          )
+          for url in "${raw_github_urls[@]:-}"; do
+            [[ -z "$url" ]] && continue
+            ref=$(echo "$url" | awk -F/ '{print $6}')
+            if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              add_finding "raw.githubusercontent.com artifact is not commit-pinned: $url"
+            fi
+          done
+
+          # For each upstream owner/repo, enforce a single ref across all raw pulls.
+          # Mixed refs across files are a subtle drift vector.
+          if [[ ${#raw_github_urls[@]} -gt 0 ]]; then
+            while IFS= read -r repo_key; do
+              [[ -z "$repo_key" ]] && continue
+              refs=$(printf '%s\n' "${raw_github_urls[@]}" \
+                | awk -F/ -v key="$repo_key" '$4"/"$5==key {print $6}' \
+                | sort -u)
+              ref_count=$(printf '%s\n' "$refs" | sed '/^$/d' | wc -l | tr -d ' ')
+              if [[ "$ref_count" -gt 1 ]]; then
+                refs_csv=$(printf '%s\n' "$refs" | paste -sd ',' -)
+                add_finding "Multiple refs detected for raw upstream $repo_key: $refs_csv"
+              fi
+            done < <(printf '%s\n' "${raw_github_urls[@]}" | awk -F/ '{print $4"/"$5}' | sort -u)
+          fi
+
+          # Azure CLI extensions are external dependencies too.
+          # Flag unpinned extension installs and preview/auto-upgrade usage.
+          mapfile -t az_ext_lines < <(grep -nE 'az extension add' vm/cloud-init-aio.tmpl.yaml || true)
+          for line in "${az_ext_lines[@]:-}"; do
+            [[ -z "$line" ]] && continue
+            cmd_text="${line#*:}"
+            if [[ ! "$cmd_text" =~ --version[[:space:]]+[0-9] ]]; then
+              add_finding "Azure CLI extension add is not version-pinned: $line"
+            fi
+            if [[ "$cmd_text" =~ --upgrade ]]; then
+              add_finding "Azure CLI extension add uses --upgrade (mutable over time): $line"
+            fi
+            if [[ "$cmd_text" =~ allow-preview[[:space:]]+True ]]; then
+              add_finding "Azure CLI extension add allows preview extension bits: $line"
+            fi
+          done
+
+          # APT packages are external dependencies; unpinned versions can drift.
+          mapfile -t apt_install_lines < <(grep -nE 'apt-get install -y' vm/cloud-init-aio.tmpl.yaml || true)
+          for line in "${apt_install_lines[@]:-}"; do
+            [[ -z "$line" ]] && continue
+            cmd_text="${line#*:}"
+
+            pkg_list=$(echo "$cmd_text" | sed -E 's/.*apt-get install -y[[:space:]]+//')
+            unpinned=""
+            for pkg in $pkg_list; do
+              # Skip shell escapes/continuations if introduced later.
+              [[ "$pkg" == "\\" ]] && continue
+              if [[ "$pkg" != *"="* ]]; then
+                unpinned+="$pkg,"
+              fi
+            done
+
+            if [[ -n "$unpinned" ]]; then
+              unpinned="${unpinned%,}"
+              add_finding "apt-get install packages are not version-pinned: $unpinned (line: $line)"
+            fi
+          done
+
+          # ----------------------------------------------------------------------
+          # 4c) External code execution safety checks
+          # ----------------------------------------------------------------------
+          # Flag direct remote execution patterns (curl|bash, wget|sh, etc.).
+          mapfile -t direct_exec_lines < <(
+            grep -nE 'curl[^\n\|]*\|\s*(bash|sh)|wget[^\n\|]*\|\s*(bash|sh)' deploy.sh vm/cloud-init-aio.tmpl.yaml || true
+          )
+          for line in "${direct_exec_lines[@]:-}"; do
+            [[ -z "$line" ]] && continue
+            add_finding "Direct remote script execution detected ($line). Consider downloading, pinning, and verifying before execution."
+          done
+
+          # Flag GitHub non-raw endpoints that are likely html pages, not immutable artifacts.
+          mapfile -t github_blob_urls < <(
+            grep -RhoE 'https://github\.com/[^"() <>]+' deploy.sh vm/cloud-init-aio.tmpl.yaml README.md \
+              | grep '/blob/' \
+              | sed 's/[.,;:]$//' \
+              | sort -u || true
+          )
+          for url in "${github_blob_urls[@]:-}"; do
+            [[ -z "$url" ]] && continue
+            add_finding "GitHub blob URL used as artifact source (not raw immutable content): $url"
+          done
+
+          # For external fetches in scripts/templates, require timeout + retry posture.
+          # This catches brittle pulls that often fail learners due to transient upstream/network issues.
+          mapfile -t fetch_cmd_lines < <(
+            grep -nE '\bcurl\b|\bwget\b' deploy.sh vm/cloud-init-aio.tmpl.yaml || true
+          )
+          for line in "${fetch_cmd_lines[@]:-}"; do
+            [[ -z "$line" ]] && continue
+            cmd_text="${line#*:}"
+
+            if [[ "$cmd_text" =~ \bcurl\b ]]; then
+              if [[ ! "$cmd_text" =~ --max-time ]] || [[ ! "$cmd_text" =~ (--retry|-f|-sS) ]]; then
+                add_finding "curl command may be fragile (missing timeout/retry/strict flags): $line"
+              fi
+            fi
+
+            if [[ "$cmd_text" =~ \bwget\b ]]; then
+              if [[ ! "$cmd_text" =~ (--timeout|-T) ]] || [[ ! "$cmd_text" =~ (--tries|-t) ]]; then
+                add_finding "wget command may be fragile (missing timeout/tries): $line"
+              fi
+            fi
+          done
+
+          # ----------------------------------------------------------------------
+          # 4d) Remote manifest image mutability check
+          # ----------------------------------------------------------------------
+          # For externally fetched Kubernetes YAML, flag image tags that are mutable (e.g., :latest).
+          mapfile -t remote_yaml_urls < <(
+            printf '%s\n' "${raw_github_urls[@]:-}" | grep -E '\.(ya?ml)(\?.*)?$' || true
+          )
+          for url in "${remote_yaml_urls[@]:-}"; do
+            [[ -z "$url" ]] && continue
+            manifest=$(curl -L -sS --max-time 20 "$url" || true)
+            [[ -z "$manifest" ]] && continue
+
+            mapfile -t latest_images < <(
+              printf '%s\n' "$manifest" | grep -E '^[[:space:]]*image:[[:space:]]*[^#]+' | grep -E ':[[:space:]]*latest|:latest([[:space:]]|$)' || true
+            )
+            for img_line in "${latest_images[@]:-}"; do
+              [[ -z "$img_line" ]] && continue
+              add_finding "Remote manifest appears to use mutable image tag latest ($url): $img_line"
+            done
+          done
+
+          # ----------------------------------------------------------------------
+          # 5) Package findings for dedupe + issue creation
+          # ----------------------------------------------------------------------
+          if [[ -s "$FINDINGS_FILE" ]]; then
+            sort -u "$FINDINGS_FILE" > findings.sorted.txt
+            mv findings.sorted.txt "$FINDINGS_FILE"
+            hash=$(sha256sum "$FINDINGS_FILE" | awk '{print $1}')
+            echo "has_findings=true" >> "$GITHUB_OUTPUT"
+            echo "fingerprint=$hash" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Lab Rot Watch Findings"
+              echo
+              while IFS= read -r f; do
+                echo "- [ ] $f"
+              done < "$FINDINGS_FILE"
+              echo
+              echo "<!-- lab-rot-fingerprint: $hash -->"
+            } > findings.md
+          else
+            echo "has_findings=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update lab-rot issue
+        if: steps.checks.outputs.has_findings == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FINGERPRINT: ${{ steps.checks.outputs.fingerprint }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh label create lab-rot --color FBCA04 --description "Lab drift findings" >/dev/null 2>&1 || true
+
+          existing=""
+          mapfile -t open_issues < <(gh issue list --label lab-rot --state open --json number --jq '.[].number' || true)
+
+          for n in "${open_issues[@]:-}"; do
+            [[ -z "$n" ]] && continue
+            body=$(gh issue view "$n" --json body --jq '.body' || true)
+            if grep -Fq "<!-- lab-rot-fingerprint: $FINGERPRINT -->" <<< "$body"; then
+              existing="$n"
+              break
+            fi
+          done
+
+          stamp=$(date -u +"%Y-%m-%d %H:%M:%SZ")
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "Repeated on $stamp by .github/workflows/lab-rot-watch.yml with unchanged findings fingerprint \\`$FINGERPRINT\\`."
+          else
+            title="Lab rot watch findings ($(date -u +%Y-%m-%d))"
+            gh issue create --title "$title" --label lab-rot --body-file findings.md
+          fi
+
+      - name: No findings
+        if: steps.checks.outputs.has_findings != 'true'
+        run: echo "No lab-rot findings detected."
