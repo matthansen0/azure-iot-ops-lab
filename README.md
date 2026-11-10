@@ -103,23 +103,27 @@ az iot ops list -g rg-aioOps -o table
 
 ---
 
-## 📊 Next Steps: Get Insights
+## 📊 Optional: Send data to Fabric Real-Time Intelligence
 
+Before running `get-insights.sh`, create a non-personal Fabric workspace assigned to a Fabric capacity or trial, an eventstream, and a [custom endpoint source](https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-custom-app). In the Fabric portal, grant the lab's cloud-connection managed identity Contributor access to the workspace. The script does not create the workspace or grant Fabric permissions.
 
-After deploying and running the lab, a Log Analytics workspace is automatically created for you in the ops resource group. You can quickly get started with the Azure IoT Operations "Get Insights" tutorial:
+From the custom endpoint's **Kafka** connection details, copy the bootstrap server and topic. In Azure Cloud Shell, sign in to the subscription containing the lab and install a current Azure IoT Operations CLI extension:
 
-1. You will exit SSH, and go back to the cloud shell, then run the provided script to check for required extensions, find your Log Analytics workspace, and run a sample query:
+```bash
+az extension add --name azure-iot-ops --version 2.11.2 --upgrade --yes
+export FABRIC_WORKSPACE_ID="<workspace-guid>"
+export FABRIC_BOOTSTRAP_SERVER="<bootstrap-server>:9093"
+export FABRIC_TOPIC="<eventstream-kafka-topic>"
+bash get-insights.sh rg-aioOps
+```
 
-> Default resource group is `rg-aioOps`; workspace name is always `aio-laworkspace` (created by `deploy.sh`).
+Use the Fabric workspace GUID, not an Azure Resource Manager resource ID. The caller needs access to the workspace and permission to assign the managed identity to the AIO instance. `jq` is also required. The script validates the workspace and capacity, assigns the managed identity, and creates or replaces a Fabric endpoint and data flow; verify that messages arrive in the eventstream afterward.
 
-  ```bash
-  ./get-insights.sh rg-aioOps
-  ```
+The defaults are AIO instance `aio-k3s-instance`, managed identity `aio-k3s-cloud-mi`, data flow profile `default`, and source topic `azure-iot-operations/data/oven`. Override them with `AIO_INSTANCE_NAME`, `FABRIC_MI_NAME`, `DATAFLOW_PROFILE`, and `DATAFLOW_SOURCE_TOPIC` if your lab differs. `FABRIC_ENDPOINT_NAME` and `DATAFLOW_NAME` control the names of the resources created or replaced.
 
+Run `bash tests/test-get-insights.sh` to exercise the preflight and generated data flow with mocked Azure commands; the test does not create resources.
 
-1. Explore more insights and queries as described in the official docs: [Tutorial - Get Insights](https://learn.microsoft.com/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights)
-
-The script will output the latest IoT Operations logs from your deployment. You can modify the query or use the Azure Portal for deeper analysis.
+For Log Analytics, use the `aio-laworkspace` workspace created in the operations resource group and the [Get Insights tutorial](https://learn.microsoft.com/azure/iot-operations/end-to-end-tutorials/tutorial-get-insights).
 
 ---
 

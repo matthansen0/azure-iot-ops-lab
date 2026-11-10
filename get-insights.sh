@@ -1,85 +1,98 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script sets up a Fabric RTI data flow endpoint in Azure IoT Operations and integrates the oven asset with it.
-# Prerequisites: AIO instance deployed with secure settings, Fabric workspace and RTI endpoint created, and required secrets in Key Vault.
+usage() {
+  cat <<'EOF'
+Usage: FABRIC_WORKSPACE_ID=<guid> FABRIC_BOOTSTRAP_SERVER=<host:port> \
+       FABRIC_TOPIC=<topic> bash get-insights.sh [ops-resource-group]
 
-# User-editable variables (override with env or edit here)
-OPS_RG="rg-aioOps"
-AIO_INSTANCE_NAME="aio-k3s-instance"
-AIO_NAMESPACE="myqsnamespace"
-OVEN_ASSET_NAME="oven"
-FABRIC_WORKSPACE_ID="<your-fabric-workspace-id>"   # e.g. /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Fabric/workspaces/<name>
-FABRIC_RTI_ENDPOINT="<your-fabric-rti-endpoint>"   # e.g. https://<rti>.fabric.microsoft.com/api/...
-FABRIC_MI_NAME="aio-k3s-cloud-mi"                  # The managed identity assigned for cloud connections
-KEYVAULT_NAME="aiokv$(date +%s)"                   # Or your actual Key Vault name
-SECRET_NAME="<your-fabric-secret-name>"            # The secret synced from Key Vault
+The Fabric workspace, eventstream, custom endpoint, and managed-identity
+workspace access must already exist. See the README for prerequisites.
+EOF
+}
 
-# --- Fabric workspace and RTI endpoint automation ---
+error() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
 
-FABRIC_RG="$OPS_RG"  # Use same RG for simplicity
-FABRIC_WORKSPACE_NAME="aio-fabric-ws"
-FABRIC_LOCATION="eastus2"
-FABRIC_RTI_NAME="aio-fabric-rti"
-
-# Register Microsoft.Fabric provider if needed
-if ! az provider show -n Microsoft.Fabric --query registrationState -o tsv | grep -q Registered; then
-  echo "Registering Microsoft.Fabric resource provider..."
-  az provider register -n Microsoft.Fabric
-  echo "Waiting for Microsoft.Fabric provider registration..."
-  for i in {1..20}; do
-    state=$(az provider show -n Microsoft.Fabric --query registrationState -o tsv)
-    if [[ "$state" == "Registered" ]]; then break; fi
-    sleep 10
-  done
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+if [[ $# -gt 1 || "${1:-}" == -* ]]; then
+  usage >&2
+  exit 2
 fi
 
-# Create Fabric workspace (lowest SKU)
-if ! az resource show -g "$FABRIC_RG" -n "$FABRIC_WORKSPACE_NAME" --resource-type "Microsoft.Fabric/workspaces" >/dev/null 2>&1; then
-  echo "Creating Fabric workspace..."
-  az resource create \
-    --resource-group "$FABRIC_RG" \
-    --name "$FABRIC_WORKSPACE_NAME" \
-    --resource-type "Microsoft.Fabric/workspaces" \
-    --location "$FABRIC_LOCATION" \
-    --properties '{"sku":{"name":"F2"}}'
+OPS_RG="${1:-${OPS_RG:-rg-aioOps}}"
+AIO_INSTANCE_NAME="${AIO_INSTANCE_NAME:-aio-k3s-instance}"
+FABRIC_MI_NAME="${FABRIC_MI_NAME:-aio-k3s-cloud-mi}"
+FABRIC_ENDPOINT_NAME="${FABRIC_ENDPOINT_NAME:-fabric-rti-endpoint}"
+DATAFLOW_NAME="${DATAFLOW_NAME:-oven-to-fabric-rti}"
+DATAFLOW_PROFILE="${DATAFLOW_PROFILE:-default}"
+DATAFLOW_SOURCE_TOPIC="${DATAFLOW_SOURCE_TOPIC:-azure-iot-operations/data/oven}"
+
+[[ -n "${FABRIC_WORKSPACE_ID:-}" ]] || error "Set FABRIC_WORKSPACE_ID to the existing workspace GUID."
+[[ -n "${FABRIC_BOOTSTRAP_SERVER:-}" ]] || error "Set FABRIC_BOOTSTRAP_SERVER to the eventstream Kafka host and port."
+[[ -n "${FABRIC_TOPIC:-}" ]] || error "Set FABRIC_TOPIC to the eventstream Kafka topic."
+[[ "$FABRIC_WORKSPACE_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] ||
+  error "FABRIC_WORKSPACE_ID must be a GUID, not an Azure resource ID."
+[[ "$FABRIC_BOOTSTRAP_SERVER" =~ ^[[:alnum:].-]+:[0-9]{1,5}$ ]] ||
+  error "FABRIC_BOOTSTRAP_SERVER must be a hostname and port, without a URL scheme."
+port="${FABRIC_BOOTSTRAP_SERVER##*:}"
+(( 10#$port >= 1 && 10#$port <= 65535 )) || error "FABRIC_BOOTSTRAP_SERVER has an invalid port."
+
+for command in az jq; do
+  command -v "$command" >/dev/null 2>&1 || error "$command is required."
+done
+
+if ! workspace="$(az rest --method get \
+  --url "https://api.fabric.microsoft.com/v1/workspaces/$FABRIC_WORKSPACE_ID" \
+  --resource "https://api.fabric.microsoft.com" --output json)"; then
+  error "Unable to access the Fabric workspace. Check the workspace ID, tenant, and permissions."
 fi
-FABRIC_WORKSPACE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$FABRIC_RG/providers/Microsoft.Fabric/workspaces/$FABRIC_WORKSPACE_NAME"
+workspace_id="$(jq -er '.id | strings | select(length > 0)' <<< "$workspace")" ||
+  error "Fabric returned a workspace without an ID."
+[[ "${workspace_id,,}" == "${FABRIC_WORKSPACE_ID,,}" ]] ||
+  error "Fabric returned a different workspace ID."
+workspace_type="$(jq -r '.type // empty' <<< "$workspace")"
+[[ "$workspace_type" == "Workspace" ]] || error "A non-personal Fabric workspace is required."
+capacity_id="$(jq -r '.capacityId // empty' <<< "$workspace")"
+[[ -n "$capacity_id" ]] || error "Assign the Fabric workspace to a capacity or trial before continuing."
 
-echo "Fabric workspace created: $FABRIC_WORKSPACE_ID"
+if ! identity="$(az identity show --name "$FABRIC_MI_NAME" --resource-group "$OPS_RG" --output json)"; then
+  error "Unable to find managed identity $FABRIC_MI_NAME in $OPS_RG."
+fi
+identity_id="$(jq -er '.id | strings | select(length > 0)' <<< "$identity")" ||
+  error "The managed identity response does not contain a resource ID."
+client_id="$(jq -er '.clientId | strings | select(length > 0)' <<< "$identity")" ||
+  error "The managed identity response does not contain a client ID."
+tenant_id="$(az account show --query tenantId --output tsv)" || error "Unable to determine the Azure tenant."
+[[ -n "$tenant_id" ]] || error "The Azure account did not return a tenant ID."
+az iot ops show --name "$AIO_INSTANCE_NAME" --resource-group "$OPS_RG" --output none ||
+  error "Unable to access Azure IoT Operations instance $AIO_INSTANCE_NAME."
 
-# --- Auto-generate RTI endpoint URL after workspace creation ---
-# (This is a placeholder. Replace with actual RTI endpoint creation logic if/when CLI support is available.)
-FABRIC_RTI_ENDPOINT="https://${FABRIC_RTI_NAME}.${FABRIC_LOCATION}.fabric.microsoft.com/api/endpoint"
-SECRET_NAME="fabric-rti-secret"
+config_file="$(mktemp --suffix=.json)"
+trap 'rm -f -- "$config_file"' EXIT
+jq -n --arg source "$DATAFLOW_SOURCE_TOPIC" --arg endpoint "$FABRIC_ENDPOINT_NAME" --arg topic "$FABRIC_TOPIC" '
+  {
+    mode: "Enabled",
+    operations: [
+      {operationType: "Source", sourceSettings: {endpointRef: "default", dataSources: [$source]}},
+      {operationType: "Destination", destinationSettings: {endpointRef: $endpoint, dataDestination: $topic}}
+    ]
+  }
+' > "$config_file"
 
-# Get resource IDs
-FABRIC_MI_ID=$(az identity show --name "$FABRIC_MI_NAME" --resource-group "$OPS_RG" --query id -o tsv)
-AIO_INSTANCE_ID=$(az iot ops show -g "$OPS_RG" -n "$AIO_INSTANCE_NAME" --query id -o tsv)
+echo "Validated Fabric workspace $workspace_id. Configuring Azure IoT Operations..."
+az iot ops identity assign --name "$AIO_INSTANCE_NAME" --resource-group "$OPS_RG" \
+  --mi-user-assigned "$identity_id" --usage dataflow --output none
+az iot ops dataflow endpoint create fabric-realtime \
+  --resource-group "$OPS_RG" --instance "$AIO_INSTANCE_NAME" --name "$FABRIC_ENDPOINT_NAME" \
+  --host "$FABRIC_BOOTSTRAP_SERVER" --auth-type UserAssignedManagedIdentity \
+  --client-id "$client_id" --tenant-id "$tenant_id" --output none
+az iot ops dataflow apply --resource-group "$OPS_RG" --instance "$AIO_INSTANCE_NAME" \
+  --profile "$DATAFLOW_PROFILE" --name "$DATAFLOW_NAME" --config-file "$config_file" --output none
 
-# Create the Fabric RTI data flow endpoint in AIO
-az iot ops dataflow endpoint create \
-  --instance "$AIO_INSTANCE_NAME" \
-  --resource-group "$OPS_RG" \
-  --name "fabric-rti-endpoint" \
-  --type fabric-rti \
-  --url "$FABRIC_RTI_ENDPOINT" \
-  --mi-user-assigned "$FABRIC_MI_ID" \
-  --secret-name "$SECRET_NAME" \
-  --namespace "$AIO_NAMESPACE" \
-  --description "Data flow from oven asset to Fabric RTI endpoint"
-
-echo "Fabric RTI data flow endpoint created."
-
-# Integrate the oven asset with the Fabric RTI endpoint
-echo "Integrating oven asset with Fabric RTI endpoint..."
-az iot ops dataflow create \
-  --instance "$AIO_INSTANCE_NAME" \
-  --resource-group "$OPS_RG" \
-  --name "oven-to-fabric-rti" \
-  --source-asset "$OVEN_ASSET_NAME" \
-  --target-endpoint "fabric-rti-endpoint" \
-  --namespace "$AIO_NAMESPACE" \
-  --description "Connect oven asset to Fabric RTI endpoint"
-
-echo "Oven asset is now integrated with Fabric RTI endpoint."
+echo "Fabric endpoint and data flow configured. Verify messages in the Fabric eventstream."
