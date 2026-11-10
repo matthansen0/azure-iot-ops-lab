@@ -105,9 +105,9 @@ az iot ops list -g rg-aioOps -o table
 
 ## 📊 Optional: Send data to Fabric Real-Time Intelligence
 
-Before running `get-insights.sh`, create a non-personal Fabric workspace assigned to a Fabric capacity or trial, an eventstream, and a [custom endpoint source](https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-custom-app). In the Fabric portal, grant the lab's cloud-connection managed identity Contributor access to the workspace. The script does not create the workspace or grant Fabric permissions.
+Before running `get-insights.sh`, create a non-personal Fabric workspace assigned to a Fabric capacity or trial, an eventstream, and a [custom endpoint source](https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-custom-app). In the Fabric portal, grant the lab's cloud-connection managed identity Contributor access to the workspace. Your Fabric tenant must allow service principals to create workspaces, connections, and deployment pipelines and to call Fabric public APIs; see the [managed-identity prerequisites](https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/connect-using-managed-identity#prerequisites). The script does not create the workspace or grant Fabric permissions.
 
-From the custom endpoint's **Kafka** connection details, copy the bootstrap server and topic. In Azure Cloud Shell, sign in to the subscription containing the lab and install a current Azure IoT Operations CLI extension:
+From the custom endpoint's **Kafka > Entra ID Authentication** connection details, copy the bootstrap server and topic. In Azure Cloud Shell, sign in to the subscription containing the lab and install the Azure IoT Operations CLI extension:
 
 ```bash
 az extension add --name azure-iot-ops --version 2.11.2 --upgrade --yes
