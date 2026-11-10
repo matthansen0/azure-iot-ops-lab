@@ -18,9 +18,6 @@ if [[ $# -gt 0 ]]; then
   export_manifest="$2"
 fi
 
-for script in "$repo_root/deploy.sh" "$repo_root/destroy.sh"; do
-  bash -n "$script"
-done
 awk '
   /^  - path: \/usr\/local\/bin\/aio-install.sh$/ { found = 1; next }
   found && /^    content: \|$/ { script = 1; next }
@@ -28,6 +25,51 @@ awk '
   script { sub(/^      /, ""); print }
   END { if (!script) exit 1 }
 ' "$template" > "$work/install.sh"
+
+mkdir "$work/bin"
+cat > "$work/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -ge 3 && "$1" == apply && "$2" == -f ]] || {
+  echo "Unexpected kubectl command: $*" >&2
+  exit 1
+}
+cp -- "$3" "$TEST_APPLIED_MANIFEST"
+EOF
+chmod +x "$work/bin/kubectl"
+
+if [[ -n "$export_manifest" ]]; then
+  awk '
+    /^# Simulator \+ quickstart Bicep$/ { capture = 1 }
+    capture { print }
+    capture && /^kubectl apply -f "\$OPC_MANIFEST"([[:space:]]|$)/ { complete = 1; exit }
+    END { if (!complete) exit 1 }
+  ' "$work/install.sh" > "$work/simulator.sh" ||
+    fail "Could not extract the simulator manifest setup."
+
+  PATH="$work/bin:$PATH" TMPDIR="$work" TEST_APPLIED_MANIFEST="$work/applied.yaml" \
+    bash -euo pipefail -c '
+      log() { :; }
+      cleanup() {
+        if [[ -n "${OPC_MANIFEST:-}" ]]; then rm -f -- "$OPC_MANIFEST"; fi
+      }
+      trap cleanup EXIT
+      source "$1"
+    ' _ "$work/simulator.sh"
+
+  grep -Eq '^[[:space:]]*image:[[:space:]]*mcr\.microsoft\.com/iotedge/opc-plc@sha256:[0-9a-f]{64}([[:space:]]|$)' "$work/applied.yaml" ||
+    fail "The applied simulator manifest must use an image digest."
+  if grep -Eq '^[[:space:]]*image:[[:space:]]*[^[:space:]]*:latest([[:space:]]|$)' "$work/applied.yaml"; then
+    fail "The applied simulator manifest still contains a latest image."
+  fi
+  cp -- "$work/applied.yaml" "$export_manifest"
+  echo "Simulator manifest pin verification passed."
+  exit 0
+fi
+
+for script in "$repo_root/deploy.sh" "$repo_root/destroy.sh"; do
+  bash -n "$script"
+done
 bash -n "$work/install.sh"
 
 mapfile -t extension_installs < <(grep '^az extension add ' "$work/install.sh")
@@ -64,7 +106,6 @@ awk '
   END { if (!complete) exit 1 }
 ' "$work/install.sh" > "$work/quickstart.sh"
 
-mkdir "$work/bin"
 cat > "$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -88,12 +129,6 @@ case "$url" in
     ;;
   *) echo "Unexpected download: $url" >&2; exit 1 ;;
 esac
-EOF
-cat > "$work/bin/kubectl" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "$1" == apply && "$2" == -f ]] || exit 1
-cp "$3" "$TEST_APPLIED_MANIFEST"
 EOF
 cat > "$work/bin/az" <<'EOF'
 #!/usr/bin/env bash
@@ -175,9 +210,5 @@ if run_quickstart > "$work/bicep-download.log" 2>&1; then
 fi
 [[ -e "$TEST_APPLIED_MANIFEST" && ! -e "$TEST_DEPLOY_ARGS" ]] ||
   fail "A failed Bicep download must not create the deployment."
-
-if [[ -n "$export_manifest" ]]; then
-  cp -- "$TEST_APPLIED_MANIFEST" "$export_manifest"
-fi
 
 echo "Quickstart contract and failure-path checks passed."

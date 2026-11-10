@@ -261,6 +261,10 @@ jobs:
           # ----------------------------------------------------------------------
           # 4d) Remote manifest image mutability check
           # ----------------------------------------------------------------------
+          if ! bash tests/test-quickstart.sh; then
+            add_finding "Quickstart checks failed; see the lab-rot workflow log."
+          fi
+
           # Scan the effective simulator manifest after its tested digest override.
           simulator_url=$(grep -oE 'https://raw\.githubusercontent\.com/Azure-Samples/explore-iot-operations/[0-9a-f]{40}/samples/quickstarts/opc-plc-deployment\.yaml' vm/cloud-init-aio.tmpl.yaml || true)
           rendered_simulator=$(mktemp)

@@ -85,7 +85,7 @@ Cloud-init starts the installer automatically. Follow the log and complete the A
 
 The install script pins the Azure CLI extensions, Helm installer and version, upstream AIO quickstart files, and simulator image. Update these together and validate the full lab before changing the pins. The existing Ubuntu utilities intentionally follow the configured package repositories so they can receive security updates; the lab-rot watcher allows those packages but flags new unpinned packages. The Azure CLI and K3s bootstrap installers also follow their upstream releases.
 
-Run `bash tests/test-quickstart.sh` and `bash tests/test-lab-rot-watch.sh` to check shell syntax, the pinned upstream template contract, simulator failure handling, and lab-rot detection without deploying Azure resources. The tests download the pinned quickstart files.
+Run `bash tests/test-quickstart.sh` and `bash tests/test-lab-rot-watch.sh` to check shell syntax, the pinned upstream template contract, simulator failure handling, and lab-rot detection without deploying Azure resources. The tests download the pinned quickstart files. Lab Rot Watch reports quickstart check failures separately from its rendered simulator image check.
 
 ### Verify (optional)
 
