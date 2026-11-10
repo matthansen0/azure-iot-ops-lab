@@ -93,7 +93,7 @@ Run `bash tests/test-quickstart.sh` and `bash tests/test-lab-rot-watch.sh` to ch
 # On the VM (or via Arc)
 kubectl get nodes
 kubectl get pods -n azure-iot-operations
-kubectl get pods -n azure-arc-containerstorage
+kubectl get pods -n azure-arc
 kubectl get pods -n cert-manager
 
 # In Azure
