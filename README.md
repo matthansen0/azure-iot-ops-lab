@@ -34,6 +34,8 @@ The assumption is that this deployment will be done from bash in Azure Cloud She
 az login
 ```
 
+Choose a region supported by Azure IoT Operations, such as `eastus2`, and ensure the selected VM size is available in that region and subscription.
+
 ---
 
 ## 🔒 Lab Security notes
@@ -50,7 +52,7 @@ cd azure-iot-ops-lab
 chmod +x *.sh
 ```
 
-*Deploy the VM and copy the install script*
+*Deploy the VM and start the installer*
 
 ```bash
 ./deploy.sh \
@@ -65,19 +67,25 @@ chmod +x *.sh
   --schema-namespace "aioqs-ns"
 ```
 
-### SSH into the VM and run the install script
+### Complete the installer sign-in
 
 ```bash
 ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>
 ```
 
 ```bash
-sudo bash /usr/local/bin/aio-install.sh
+sudo tail -f /var/log/aio-install.log
 ```
 
-The script will prompt you to authenticate with Azure using a device code, and will take between 30-45 minutes to complete.
+Cloud-init starts the installer automatically. Follow the log and complete the Azure device-code sign-in when prompted; the installer takes approximately 30–45 minutes. Do not start a second copy of the installer while cloud-init is running.
 
 ![Install Script](media/install-script.png)
+
+### Dependency versions
+
+The install script pins the Azure CLI extensions, Helm installer and version, upstream AIO quickstart files, and simulator image. Update these together and validate the full lab before changing the pins. The existing Ubuntu utilities intentionally follow the configured package repositories so they can receive security updates; the lab-rot watcher allows those packages but flags new unpinned packages. The Azure CLI and K3s bootstrap installers also follow their upstream releases.
+
+Run `bash tests/test-quickstart.sh` and `bash tests/test-lab-rot-watch.sh` to check shell syntax, the pinned upstream template contract, simulator failure handling, and lab-rot detection without deploying Azure resources. The tests download the pinned quickstart files.
 
 ### Verify (optional)
 
@@ -99,7 +107,7 @@ az iot ops list -g rg-aioOps -o table
 > ```
 
 > [!TIP]
-> You will be able to see finalized progress of the deployment once there is device messages being sent into the IoT Hub.
+> The quickstart's data flow sends simulator messages to an Event Hubs destination.
 
 ---
 
