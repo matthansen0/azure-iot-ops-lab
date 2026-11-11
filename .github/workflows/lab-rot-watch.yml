@@ -178,7 +178,7 @@ jobs:
             if [[ ! "$cmd_text" =~ --version[[:space:]]+[0-9] ]]; then
               add_finding "Azure CLI extension add is not version-pinned: $line"
             fi
-            if [[ "$cmd_text" =~ --upgrade ]]; then
+            if [[ "$cmd_text" =~ --upgrade ]] && [[ ! "$cmd_text" =~ --version[[:space:]]+[0-9] ]]; then
               add_finding "Azure CLI extension add uses --upgrade (mutable over time): $line"
             fi
             if [[ "$cmd_text" =~ allow-preview[[:space:]]+True ]]; then
@@ -198,6 +198,10 @@ jobs:
               # Skip shell escapes/continuations if introduced later.
               [[ "$pkg" == "\\" ]] && continue
               if [[ "$pkg" != *"="* ]]; then
+                # These Ubuntu utilities intentionally receive repository security updates.
+                case "$pkg" in
+                  curl|wget|git|jq|ca-certificates|apt-transport-https|lsb-release|gnupg) continue ;;
+                esac
                 unpinned+="$pkg,"
               fi
             done
@@ -257,13 +261,32 @@ jobs:
           # ----------------------------------------------------------------------
           # 4d) Remote manifest image mutability check
           # ----------------------------------------------------------------------
+          if ! bash tests/test-quickstart.sh; then
+            add_finding "Quickstart checks failed; see the lab-rot workflow log."
+          fi
+
+          # Scan the effective simulator manifest after its tested digest override.
+          simulator_url=$(grep -oE 'https://raw\.githubusercontent\.com/Azure-Samples/explore-iot-operations/[0-9a-f]{40}/samples/quickstarts/opc-plc-deployment\.yaml' vm/cloud-init-aio.tmpl.yaml || true)
+          rendered_simulator=$(mktemp)
+          trap 'rm -f -- "$rendered_simulator"' EXIT
+          if [[ -n "$simulator_url" ]]; then
+            if ! bash tests/test-quickstart.sh --export-applied-manifest "$rendered_simulator"; then
+              add_finding "Simulator manifest pin verification failed; see the lab-rot workflow log."
+              rm -f -- "$rendered_simulator"
+            fi
+          fi
+
           # For externally fetched Kubernetes YAML, flag image tags that are mutable (e.g., :latest).
           mapfile -t remote_yaml_urls < <(
             printf '%s\n' "${raw_github_urls[@]:-}" | grep -E '\.(ya?ml)(\?.*)?$' || true
           )
           for url in "${remote_yaml_urls[@]:-}"; do
             [[ -z "$url" ]] && continue
-            manifest=$(curl -L -sS --max-time 20 "$url" || true)
+            if [[ "$url" == "$simulator_url" && -s "$rendered_simulator" ]]; then
+              manifest=$(< "$rendered_simulator")
+            else
+              manifest=$(curl -L -sS --max-time 20 "$url" || true)
+            fi
             [[ -z "$manifest" ]] && continue
 
             mapfile -t latest_images < <(

@@ -220,6 +220,7 @@ az vm boot-diagnostics enable --resource-group "$COMPUTE_RG" --name "$VM_NAME" -
 
 
 
-echo "==> Done. Now login and run the AIO install script."
-echo "Via SSH: ssh -i ~/.ssh/id_rsa azureuser@<VM_PUBLIC_IP>"
-echo "or Serial Console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"
+echo "==> VM created. The AIO installer starts automatically; complete its device-code sign-in."
+echo "Via SSH: ssh -i <PRIVATE_KEY> $ADMIN_USERNAME@<VM_PUBLIC_IP>"
+echo "Then follow the installer log: sudo tail -f /var/log/aio-install.log"
+echo "or use Serial Console: az serial-console connect -g $COMPUTE_RG -n $VM_NAME"

@@ -19,7 +19,19 @@ write_files:
 
     content: |
       set -euo pipefail
-      trap 'EXITCODE=$?; if [ $EXITCODE -ne 0 ]; then echo; echo "===== /var/log/aio-install.log (tail) ====="; tail -40 /var/log/aio-install.log; echo "===== END LOG ====="; fi' EXIT
+      cleanup() {
+        local exit_code=$? file
+        for file in "${HELM_INSTALLER:-}" "${OPC_MANIFEST:-}" "${QUICKSTART_BICEP:-}"; do
+          if [[ -n "$file" ]]; then rm -f -- "$file"; fi
+        done
+        if [[ $exit_code -ne 0 ]]; then
+          echo
+          echo "===== /var/log/aio-install.log (tail) ====="
+          tail -40 /var/log/aio-install.log
+          echo "===== END LOG ====="
+        fi
+      }
+      trap cleanup EXIT
       source /etc/aio.env
 
       log(){ echo -e "\e[1;36m==>\e[0m $*"; }
@@ -43,7 +55,7 @@ write_files:
       if ! command -v az >/dev/null 2>&1; then
         curl -sL https://aka.ms/InstallAzureCLIDeb | bash
       fi
-      az config set extension.use_dynamic_install=yes_without_prompt
+      az config set extension.use_dynamic_install=no
 
       log "Login with your Azure user account (device code)"
       az login --use-device-code
@@ -63,8 +75,25 @@ write_files:
       until kubectl get nodes | awk 'NR>1{print $2}' | grep -q Ready; do sleep 3; done
 
       # Helm
-      if ! command -v helm >/dev/null 2>&1; then
-        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      HELM_VERSION=v3.22.1
+      HELM_CURRENT_VERSION=""
+      if command -v helm >/dev/null 2>&1; then
+        HELM_CURRENT_VERSION="$(helm version --template '{{.Version}}')"
+      fi
+      if [[ "$HELM_CURRENT_VERSION" != "$HELM_VERSION" ]]; then
+        HELM_INSTALLER="$(mktemp)"
+        curl --fail --location --silent --show-error --retry 3 --connect-timeout 10 --max-time 120 \
+          "https://raw.githubusercontent.com/helm/helm/d24950c1c457c303adc6235e9addc41ac2cee505/scripts/get-helm-3" \
+          --output "$HELM_INSTALLER"
+        if ! printf '%s  %s\n' '08edc9569a7115a22fdc4ec164a653d072440ad14a8dbe51ca9b321c903c59a9' "$HELM_INSTALLER" | sha256sum --check --status; then
+          echo "ERROR: Helm installer checksum verification failed." >&2
+          exit 1
+        fi
+        DESIRED_VERSION="$HELM_VERSION" bash "$HELM_INSTALLER"
+        if [[ "$(helm version --template '{{.Version}}')" != "$HELM_VERSION" ]]; then
+          echo "ERROR: Helm did not install at the required version $HELM_VERSION." >&2
+          exit 1
+        fi
       fi
       # Make local-path default
       if kubectl get sc local-path >/dev/null 2>&1; then
@@ -73,9 +102,9 @@ write_files:
 
       # Arc connect + features
       log "Arc connect"
-      az extension add --name connectedk8s --upgrade -y
-      az extension add --name k8s-extension --upgrade -y
-      az extension add --name k8s-configuration --upgrade -y
+      az extension add --name connectedk8s --version 1.11.6 --upgrade -y
+      az extension add --name k8s-extension --version 1.9.5 --upgrade -y
+      az extension add --name k8s-configuration --version 2.3.0 --upgrade -y
       az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" --resource-group "$OPS_RG"
 
       log "Enable features (retry up to 15 minutes, refresh token every 5 attempts)"
@@ -110,7 +139,7 @@ write_files:
 
       # AIO CLI ext + Azure resources
       log "AIO Azure resources"
-      az extension add --upgrade --name azure-iot-ops --allow-preview True
+      az extension add --name azure-iot-ops --version 2.11.2 --upgrade -y
 
       if ! az storage account show -n "$STORAGE_ACCOUNT" -g "$OPS_RG" >/dev/null 2>&1; then
         az storage account create --name "$STORAGE_ACCOUNT" --location "$LOCATION" --resource-group "$OPS_RG" --enable-hierarchical-namespace true -o none
@@ -144,8 +173,22 @@ write_files:
 
       # Simulator + quickstart Bicep
       log "Simulator + quickstart"
-      kubectl apply -f https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/opc-plc-deployment.yaml
-      wget -q https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/main/samples/quickstarts/quickstart.bicep -O /root/quickstart.bicep
+      OPC_PLC_IMAGE="mcr.microsoft.com/iotedge/opc-plc@sha256:fa926a6fc4a58d77abe034c8483d91e91aa768c5a50ea3f5d86e45b66d955486"
+      OPC_MANIFEST="$(mktemp)"
+      curl --fail --location --silent --show-error --retry 3 --connect-timeout 10 --max-time 120 \
+        "https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/1a5e3b804410612ad44b1b11f620f5677b8e010d/samples/quickstarts/opc-plc-deployment.yaml" \
+        --output "$OPC_MANIFEST"
+      if [[ "$(grep -Fc 'image: mcr.microsoft.com/iotedge/opc-plc:latest' "$OPC_MANIFEST")" -ne 1 ]]; then
+        echo "ERROR: The pinned OPC PLC manifest no longer contains the expected image." >&2
+        exit 1
+      fi
+      sed -i "s|image: mcr.microsoft.com/iotedge/opc-plc:latest|image: $OPC_PLC_IMAGE|" "$OPC_MANIFEST"
+      kubectl apply -f "$OPC_MANIFEST"
+
+      QUICKSTART_BICEP="$(mktemp --suffix=.bicep)"
+      curl --fail --location --silent --show-error --retry 3 --connect-timeout 10 --max-time 120 \
+        "https://raw.githubusercontent.com/Azure-Samples/explore-iot-operations/1a5e3b804410612ad44b1b11f620f5677b8e010d/samples/quickstarts/quickstart.bicep" \
+        --output "$QUICKSTART_BICEP"
 
       EXT_NAME=$(az k8s-extension list -g "$OPS_RG" --cluster-name "$CLUSTER_NAME" --cluster-type connectedClusters --query "[?extensionType == 'microsoft.iotoperations'].name | [0]" -o tsv)
       INST_NAME=$(az iot ops list -g "$OPS_RG" --query "[0].name" -o tsv)
@@ -153,12 +196,12 @@ write_files:
 
       az deployment group create \
         --resource-group "$OPS_RG" \
-        --template-file /root/quickstart.bicep \
+        --template-file "$QUICKSTART_BICEP" \
         --parameters clusterName="$CLUSTER_NAME" \
                      customLocationName="$CUSTOM_LOCATION_NAME" \
                      aioExtensionName="$EXT_NAME" \
                      aioInstanceName="$INST_NAME" \
-                     aioNamespaceName="$AIO_NAMESPACE_NAME"
+                     adrNamespaceName="$AIO_NAMESPACE_NAME"
 
       log "All done."
 runcmd:

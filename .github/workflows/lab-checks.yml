@@ -1,0 +1,20 @@
+name: Lab checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check quickstart contract
+        run: bash tests/test-quickstart.sh
+      - name: Check lab-rot detection
+        run: bash tests/test-lab-rot-watch.sh
